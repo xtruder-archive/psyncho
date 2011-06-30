@@ -5,6 +5,7 @@ import string
 from command import PsynchoCommand
 from psyncho import *
 from fs.opener import fsopendir
+from copy import deepcopy
 
 class TestSynch(unittest.TestCase): 
     @classmethod
@@ -82,8 +83,12 @@ class TestSynch(unittest.TestCase):
         self.cmd.SetPathStatus("root/a/file", "include")
         self.cmd.SetPathStatus("root/b/c/file", "stop")
         
+        self.cmd.NewConfig("test2", "include", "test->test2")
+        
         self.cmd.NewSynch("synchtest1","./testdirs/test1", "./testdirs/test2", "test2")
         self.cmd.Synch("synchtest1")
+        
+        print self.cmd.GenConfigTree(True)     
         
         correct_dirs=["a/m/file","b"]
         self.Checkdirs(self.CurrentDir()+"/testdirs","test1",dirs1,correct_dirs)

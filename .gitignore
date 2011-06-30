@@ -5,3 +5,5 @@ build/*
 layered_sync.egg-info/*
 pyfilesystem/*
 *.pyc
+*.db
+*.db-journal

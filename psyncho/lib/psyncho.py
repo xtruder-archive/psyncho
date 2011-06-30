@@ -4,6 +4,7 @@ import os
 
 from fs.opener import fsopendir
 from fs.utils import copyfile
+from copy import deepcopy
 
 class Enumerate(object):
     def __init__(self, names):
@@ -107,7 +108,21 @@ class PathPart(pod.Object):
         for child in self.children:
             child.delete()
             break
-
+        
+    def __deepcopy__(self, memo):
+        not_there = []
+        existing = memo.get(self, not_there)
+        if existing is not not_there:
+            return existing
+         
+        dup= None
+        if self.parent:
+            dup= PathPart(self.name+"_copy", deepcopy(self.parent, memo), deepcopy(self.PathStatus, memo), deepcopy(self.depth, memo))
+        else:
+            dup= PathPart(self.name+"_copy", None, deepcopy(self.PathStatus, memo), deepcopy(self.depth, memo))
+            
+        return dup
+            
 class ConfigLayer(pod.Object):
     def __init__(self, name, FileAccess, lPathStatus, parent=None):
         pod.Object.__init__(self)
@@ -155,6 +170,39 @@ class ConfigLayer(pod.Object):
             return previousBest.PathStatus;
             
         return self.__GetPathStatus__(path, parent.parent, previousBest, depth)
+    
+    def GetConfigByPath(self, path):
+        if self.name != path[0]:
+            return None
+        
+        if len(path)>1:
+            for child in self.children:
+                if child.GetConfigByPath(path[1:]):
+                    return child
+        else:
+            return self
+            
+        return None
+    
+    def GetConfigByName(self, name):
+        if self.name != name:
+            if self.children:
+                for child in self.children:
+                    cfg= child.GetConfigByName(name)
+                    if cfg: return cfg
+            else:
+                return None
+            
+        return self
+    
+    def GetRootConfigLayer(self):
+        parent= self.parent
+        last_parent= self
+        while parent:
+            last_parent= parent
+            parent= parent.parent
+            
+        return last_parent
         
     def pre_delete(self):
         #Only delete first child
@@ -162,7 +210,23 @@ class ConfigLayer(pod.Object):
             child.delete()
             break
         
-        self.paths.delete()   
+        self.paths.delete()
+        
+    def __deepcopy__(self, memo):
+        not_there = []
+        existing = memo.get(self, not_there)
+        if existing is not not_there:
+            return existing
+         
+        dup= None
+        if self.parent:
+            dup= ConfigLayer(self.name+"_copy", None, deepcopy(self.paths.PathStatus, memo), deepcopy(self.parent, memo))
+        else:
+            dup= ConfigLayer(self.name+"_copy", None, deepcopy(self.paths.PathStatus, memo), None)
+            
+        dup.paths= deepcopy(self.paths, memo)
+            
+        return dup
         
 class ConfigLayerManager(pod.Object):
     '''
@@ -177,12 +241,17 @@ class ConfigLayerManager(pod.Object):
         
         self.configs= []
         
+    def RootAdd(self, config):
+        root= config.GetRootConfigLayer()
+        if root not in self.configs:
+            self.configs.append(root)        
+        
     def NewConfig(self, *args, **kwargs):
         '''
         Adds new config layer, same parameters as ConfigLayer
         '''
         config = ConfigLayer(*args, **kwargs)
-        self.configs.append(config)
+        self.RootAdd(config)
         
         return config
         
@@ -196,7 +265,7 @@ class ConfigLayerManager(pod.Object):
             #Dont add config if config with the same name exists
             if self.GetConfigByName(config.name):
                 return False
-            self.configs.append(config)
+            self.RootAdd(config)
             
         return True
         
@@ -209,11 +278,22 @@ class ConfigLayerManager(pod.Object):
         if name==None:
             return None
         
-        for config in self.configs:
-            if config.name==name:
-                return config
+        name_parts= name.split("->")
         
-        return None
+        possible_cfg= None
+        for config in self.configs:
+            cfg= config.GetConfigByPath(name_parts)
+            if cfg:
+                return cfg
+            # we search for fist occurence
+            elif len(name_parts)==1 and not possible_cfg:
+                possible_cfg= config.GetConfigByName(name)
+        
+        return possible_cfg
+    
+    def DuplicateConfig(self, config):
+        dup= deepcopy(config)
+        self.AddConfig(dup)
         
     def RemoveConfig(self, config):
         '''
@@ -222,19 +302,14 @@ class ConfigLayerManager(pod.Object):
         @param config: Configuration
         @type config: ConfigLayer
         '''       
-        if not config:
-            return  
-        self._RemoveSubConfigs(config)
-        self.configs.remove(config)
-        config.delete()
-        
-    def _RemoveSubConfigs(self,config):
-        if not config:
-            return
-        for child in config.children:
-            self._RemoveSubConfigs(child)
-            if child in self.configs:
-                self.configs.remove(child)
+        if not config: return 
+        config= config.GetRootConfigLayer()
+        if config in self.configs:
+            self.configs.remove(config)
+            config.delete()
+            
+    def GetRootConfigs(self):
+        return self.configs
         
     def pre_delete(self):
         '''
@@ -243,14 +318,6 @@ class ConfigLayerManager(pod.Object):
         for config in self.configs:
             config.delete()
             break
-        
-    def GetRootConfigs(self):
-        root_configs= []
-        for config in self.configs:
-            if config.parent==None:
-                root_configs.append(config)
-                
-        return root_configs
         
 class FileSyncConfig(pod.Object):
     def __init__(self, source_path, dest_path, config_layer, name=None):
