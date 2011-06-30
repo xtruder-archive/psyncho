@@ -1,0 +1,6 @@
+bin/*
+lib/*
+include/*
+build/*
+layered_sync.egg-info/*
+pyfilesystem/*
