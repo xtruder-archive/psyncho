@@ -4,3 +4,4 @@ include/*
 build/*
 layered_sync.egg-info/*
 pyfilesystem/*
+*.pyc
