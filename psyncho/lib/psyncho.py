@@ -1,6 +1,7 @@
 import pod
 import pod.list
 import os
+import re
 
 from fs.opener import fsopendir
 from fs.utils import copyfile
@@ -53,7 +54,21 @@ class PathPart(pod.Object):
     def GetLastPart(self, path):
         if(path==[]):
             return self.parent
-        if(self.name!=path[0]):
+        match1= re.match('^\{(?P<regex>\S+)\}$',self.name)
+        match2= re.match('^\|(?P<regex>\S+)\|$',self.name)
+        if match1:
+            regex= match1.group('regex')
+            if not re.match(regex, path[0]):
+                return None
+        elif match2:
+            regex= match2.group('regex')
+            stringpath= '/'.join(path)
+            splited= re.split(regex, stringpath,1)
+            if splited[0]!=stringpath and len(stringpath)>len(splited[1]):
+                path= splited[1].split("/")
+            else:
+                return None
+        elif(self.name!=path[0]):
             return None
             
         for child in self.children:

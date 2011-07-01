@@ -12,16 +12,29 @@ class TestSynch(unittest.TestCase):
     def setUpClass(cls):
         cls.cmd= PsynchoCommand()
         
+    def OpenDirOrFile(self, f, root, dir):
+            if dir.split("/")[-1:][0].count(".")>0:
+                f.makeopendir(root+"/"+"/".join(dir.split("/")[:-1]), recursive=True)
+                f.createfile(root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
+            else:
+                f.makeopendir(root+"/"+dir, recursive=True)
+                
+    def RemoveDirOrFile(self, f, root, dir):
+            if dir.split("/")[-1:][0].count(".")>0:
+                f.remove(root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
+                f.removedir(root+"/"+"/".join(dir.split("/")[:-1]), recursive=True, force=True)
+            else:
+                f.removedir(root+"/"+dir, recursive=True, force=True)         
+        
     def Makedirs(self, path, root, dirs):
         f= fsopendir(path)
         for dir in dirs:
-            f.makeopendir(root+"/"+dir, recursive=True)
-            
+            self.OpenDirOrFile(f, root, dir)
     def Deldirs(self, path, root, dirs):
         f= fsopendir(path)
         for dir in dirs:
             try:
-                f.removedir(root+"/"+dir, recursive=True, force=True)
+                self.RemoveDirOrFile(f, root, dir)
             except:
                 continue
             
@@ -29,6 +42,8 @@ class TestSynch(unittest.TestCase):
         f= fsopendir(path)
         for dir in dirs:
             if f.isdir(root+"/"+dir):
+                self.assertTrue(dir in correct_dirs)
+            elif f.isfile(root+"/"+dir):
                 self.assertTrue(dir in correct_dirs)
             
     def CurrentDir(self):
@@ -69,7 +84,7 @@ class TestSynch(unittest.TestCase):
         self.cmd.DelConfig("test")
         
     def test_Synch(self):
-        dirs1=["a/m/file","b/c/file","c"]
+        dirs1=["a/m/file.txt", "a/file.txt","b/c/file.txt","c"]
         self.Makedirs(self.CurrentDir()+"/testdirs","test1",dirs1)
         self.Makedirs(self.CurrentDir()+"/testdirs","test2",[""])
         self.cmd.NewConfig("test", "include", None)
@@ -79,9 +94,9 @@ class TestSynch(unittest.TestCase):
         self.cmd.SetPathStatus("root/c", "stop")
         self.cmd.NewConfig("test2", "include", "test")
         self.cmd.SelectCurrentConfig("test2")
-        self.cmd.SetPathStatus("root/a/m/file", "include")
-        self.cmd.SetPathStatus("root/a/file", "include")
-        self.cmd.SetPathStatus("root/b/c/file", "stop")
+        self.cmd.SetPathStatus("root/a/m/file.txt", "include")
+        self.cmd.SetPathStatus("root/a/file.txt", "include")
+        self.cmd.SetPathStatus("root/b/c/file.txt", "stop")
         
         self.cmd.NewConfig("test2", "include", "test->test2")
         
@@ -90,7 +105,7 @@ class TestSynch(unittest.TestCase):
         
         print self.cmd.GenConfigTree(True)     
         
-        correct_dirs=["a/m/file","b"]
+        correct_dirs=["a/m/file.txt","b/c", "a/file.txt"]
         self.Checkdirs(self.CurrentDir()+"/testdirs","test1",dirs1,correct_dirs)
         self.Checkdirs(self.CurrentDir()+"/testdirs","test2",dirs1,correct_dirs)
         
@@ -99,6 +114,23 @@ class TestSynch(unittest.TestCase):
         
         self.cmd.DelConfig("test")
         self.cmd.DelConfig("test2")
+        
+    def test_regex(self):
+        conf1= self.cmd.NewConfig("test", "include", None)
+        #First rule ovverides second
+        conf1.paths.SetPathStatus(["root","jaka","{hudoklin|micka}","{cba|cde}"], PathStatus.stop)
+        conf1.paths.SetPathStatus(["root","jaka","micka","cde"], PathStatus.include)
+        result= conf1.paths.GetPathStatus(["root","jaka","hudoklin","cba"])
+        self.assertEqual(result, PathStatus.stop)   
+        result= conf1.paths.GetPathStatus(["root","jaka","micka","cde"])
+        self.assertEqual(result, PathStatus.stop)
+        
+        conf2= self.cmd.NewConfig("test2", "include", "test")
+        conf2.paths.SetPathStatus(["root","jaka","|hudoklin/micka/cba|cde|","jure"], PathStatus.stop)
+        result= conf2.paths.GetPathStatus(["root","jaka", "hudoklin","micka","cde","jure"])
+        self.assertEqual(result, PathStatus.stop)
+        
+        self.cmd.DelConfig("test")
         
 if __name__ == '__main__':
     unittest.main()
