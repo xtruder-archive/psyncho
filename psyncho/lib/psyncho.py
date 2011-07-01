@@ -6,6 +6,7 @@ import re
 from fs.opener import fsopendir
 from fs.utils import copyfile
 from copy import deepcopy
+from datetime import timedelta
 
 class Enumerate(object):
     def __init__(self, names):
@@ -334,6 +335,83 @@ class ConfigLayerManager(pod.Object):
             config.delete()
             break
         
+class FileIndex(pod.Object):
+    def __init__(self, name, parent= None, CreationTime= None, depth= 0):
+        pod.Object.__init__(self)
+        
+        self.name= name
+        self.CreationTime= CreationTime
+        
+        self.children= []
+        self.parent= parent
+        if parent!=None:
+            self.parent.children.append(self)
+        self.depth= depth
+                
+    def AddPath(self, path, CreationTime= None):
+        if(path==[]):
+            return self
+        
+        tpathPart=FileIndex(path[0], self, CreationTime, self.depth+1)
+        
+        return tpathPart.AddPath(path[1:])   
+        
+    def GetPathPart(self, path, new=False):
+        if(path==[]):
+            return self.parent
+        if(self.name!=path[0]):
+            return None
+            
+        for child in self.children:
+            tpathPart= child.GetPathPart(path[1:], new)
+            if(tpathPart!=None):
+                return tpathPart
+            
+        if(new == True):
+            return self.AddPath(path[1:])
+        
+        return self
+        
+    def DelPathPart(self, path):
+        tpathPart= self.GetPathPart(path, False)
+        if(tpathPart==None):
+            return
+        
+        tpathPart.parent.children.remove(tpathPart)
+        tpathPart.delete()
+    
+    def __str__(self):
+        absolute_path= '/'.join(self.AbsolutePath())
+        return absolute_path + " [" + self.CreationTime + "]"
+    
+    def AbsolutePath(self):
+        path=[self.name]
+        parent= self.parent
+        while parent:
+            path.append(parent.name)
+            parent= parent.parent
+        path.reverse()
+        return path 
+        
+    def pre_delete(self):
+        for child in self.children:
+            child.delete()
+            break
+        
+    def __deepcopy__(self, memo):
+        not_there = []
+        existing = memo.get(self, not_there)
+        if existing is not not_there:
+            return existing
+         
+        dup= None
+        if self.parent:
+            dup= FileIndex(self.name, deepcopy(self.parent, memo), deepcopy(self.CreationTime, memo), deepcopy(self.depth, memo))
+        else:
+            dup= FileIndex(self.name, None, deepcopy(self.CreationTime, memo), deepcopy(self.depth, memo))
+            
+        return dup
+        
 class FileSyncConfig(pod.Object):
     def __init__(self, source_path, dest_path, config_layer, name=None):
         '''
@@ -351,6 +429,15 @@ class FileSyncConfig(pod.Object):
         self.dest_path = dest_path
         self.config_layer = config_layer
         self.name= name
+        
+        self.src_index= FileIndex("root")
+        self.dst_index= FileIndex("root")
+        
+    def ClearIndexes(self):
+        self.src_index.delete()
+        self.dst_index.delete()  
+        self.src_index= FileIndex("root")
+        self.dst_index= FileIndex("root") 
         
     def __str__(self):
         return "name:'%s', src:'%s', dst:'%s', config:'%s'" \
@@ -386,6 +473,12 @@ class FileSync(object):
         '''
         self.file_sync_config = file_sync_config
         
+    def SmallTime(self, time1, time2):
+        if abs(time1 - time2)<timedelta(seconds=1):
+            return True
+        
+        return False
+        
     def sync(self, base_path= ["root"], verbose=True):
         if(self.file_sync_config.source_path):
             try:
@@ -402,10 +495,10 @@ class FileSync(object):
         else:
             return
         
-        self._synch_walk(src, dst, base_path)
-        self._synch_walk(dst, src, base_path)
+        self._synch_walk(src, dst, base_path, self.file_sync_config.src_index, self.file_sync_config.dst_index)
+        self._synch_walk(dst, src, base_path, self.file_sync_config.dst_index, self.file_sync_config.src_index)
         
-    def _synch_walk(self, src, dst, path, depth= 0,verbose=True):
+    def _synch_walk(self, src, dst, path, src_i, dst_i, depth= 0,verbose=True):
         src_files= src.listdir()
         dst_files= dst.listdir()
         config= self.file_sync_config.config_layer
@@ -417,27 +510,54 @@ class FileSync(object):
                     if verbose: print "\t"*depth+"dir_enter->"
                     new_src= src.makeopendir(file)
                     new_dst= dst.makeopendir(file)
-                    self._synch_walk(new_src, new_dst, path[:]+[file], depth+1)
+                    self._synch_walk(new_src, new_dst, path[:]+[file], src_i, dst_i, depth+1)
                     if verbose: print "\t"*depth+"<-dir_leave"
                 if status==PathStatus.stop:
                     if verbose: print "\t"*depth+"Removing dir"
                     src.removedir(file, force=True)
             if src.isfile(file):
                 if status==PathStatus.include:
+                    src_index= src_i.GetPathPart(path+[file], True)
+                    dst_index= dst_i.GetPathPart(path+[file], True)
                     if file in dst_files:
-                        if verbose: print "\t"*depth+"Synching file"
                         src_mtime= src.getinfo(file)["modified_time"]
                         dst_mtime= dst.getinfo(file)["modified_time"]
-
-                        if src_mtime>dst_mtime:
-                            copyfile(src, file, dst, file)
-                        elif src_mtime==dst_mtime:
-                            print "\t"*depth+"Nothing to synch."
-                        else:
-                            copyfile(dst, file, src, file)
+                        
+                        if verbose: print "\t"*depth+"Synching file"
+                        if src_index.CreationTime==None or dst_index.CreationTime==None:
+                            if src_mtime>dst_mtime:
+                                copyfile(src, file, dst, file)
+                                src_index.CreationTime= src_mtime
+                                dst_index.CreationTime= dst.getinfo(file)["modified_time"]
+                            else:
+                                copyfile(dst, file, src, file)
+                                dst_index.CreationTime= dst_mtime
+                                src_index.CreationTime= src.getinfo(file)["modified_time"]
+                        else:    
+                            #both files are unchanged
+                            if self.SmallTime(src_mtime, src_index.CreationTime) and self.SmallTime(dst_mtime, dst_index.CreationTime):
+                                if verbose: print "\t"*depth+"Both files are synched"
+                            #src has changed and dst has not
+                            elif src_index.CreationTime<src_mtime and self.SmallTime(dst_mtime, dst_index.CreationTime):
+                                copyfile(src, file, dst, file)
+                                dst_index.CreationTime= dst.getinfo(file)["modified_time"]
+                                print dst_index.CreationTime-dst_mtime
+                                if verbose: print "\t"*depth+"Src file has changed, but dst not"
+                            #both files has changed, update indexes 
+                            elif not self.SmallTime(src_mtime, src_index.CreationTime) and not self.SmallTime(dst_mtime, dst_index.CreationTime):
+                                print str(abs(src_mtime-src_index.CreationTime))+" "+str(abs(dst_mtime-dst_index.CreationTime))
+                                if verbose: print "\t"*depth+"Both files has changed."
+                                if src_mtime>dst_mtime:
+                                    copyfile(src, file, dst, file)
+                                    src_index.CreationTime= src_mtime
+                                    dst_index.CreationTime= dst.getinfo(file)["modified_time"]
+                                else:
+                                    copyfile(dst, file, src, file)
+                                    dst_index.CreationTime= dst_mtime
+                                    src_index.CreationTime= src.getinfo(file)["modified_time"]                             
                     else:
                         copyfile(src, file, dst, file)
-                if status==PathStatus.stop or status==PathStatus.ignore:
+                if status==PathStatus.stop:
                     if verbose: print "\t"*depth+"Removing file"
                     src.remove(file)
                     

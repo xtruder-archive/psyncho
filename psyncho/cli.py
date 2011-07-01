@@ -15,6 +15,8 @@ def main():
                       help="Selects current config layer, args: name", action="store_true", dest="select_config_layer")
     parser.add_option("--del-config-layer",
                       help="Deletes config layer, args: name", action="store_true", dest="del_config_layer")
+    parser.add_option("--del-indexes",
+                      help="Deletes indexes, args: name", action="store_true", dest="del_indexes")
     parser.add_option("--rename-config-layer",
                       help="Deletes config layer, args: name", action="store_true", dest="rename_config_layer")
     parser.add_option("--dup-config-layer",
@@ -60,6 +62,9 @@ def main():
     elif options.del_config_layer and len(args)>0:
         name= args[0]
         ps.DelConfig(name)
+    elif options.del_indexes and len(args)>0:
+        name= args[0]
+        ps.ClearIndexes(name)
     elif options.dup_config_layer and len(args)>0:
         name= args[0]
         ps.DuplicateConfig(name)

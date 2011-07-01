@@ -112,6 +112,13 @@ class PsynchoCommand(object):
         path= string_path.split("/")
         
         config.paths.DelPathPart(path)
+        
+    def ClearIndexes(self, name):
+        fsc= self.fs_mgr.GetConfigByName(name)
+        if not fsc:
+            return None
+        
+        fsc.ClearIndexes()
     
     def GenSynchList(self):
         out= "Synch configs:"
