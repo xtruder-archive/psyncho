@@ -126,9 +126,17 @@ class TestSynch(unittest.TestCase):
         self.assertEqual(result, PathStatus.stop)
         
         conf2= self.cmd.NewConfig("test2", "include", "test")
+        conf2.paths.SetPathStatus(["root","jaka"], PathStatus.ignore)
         conf2.paths.SetPathStatus(["root","jaka","|hudoklin/micka/cba|cde|","jure"], PathStatus.stop)
         result= conf2.paths.GetPathStatus(["root","jaka", "hudoklin","micka","cde","jure"])
         self.assertEqual(result, PathStatus.stop)
+        conf2.paths.SetPathStatus(["root","jaka","|\w+\.txt|"], PathStatus.include)
+        result= conf2.paths.GetPathStatus(["root","jaka","test","file.txt"])
+        self.assertEqual(result, PathStatus.include)
+        result= conf2.paths.GetPathStatus(["root","jaka","file.txt"])
+        self.assertEqual(result, PathStatus.include)
+        result= conf2.paths.GetPathStatus(["root","jaka","file.mfd"])
+        self.assertEqual(result, PathStatus.ignore)
         
         self.cmd.DelConfig("test")
         
