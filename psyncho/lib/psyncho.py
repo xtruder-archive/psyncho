@@ -15,8 +15,6 @@ class Enumerate(object):
 PathStatus=Enumerate("undef include ignore stop")
 
 class PathPart(pod.Object):
-    name= ""
-    children= []
     def __init__(self, name, parent= None, lPathStatus=PathStatus.undef, depth= 0):
         pod.Object.__init__(self)
         
@@ -50,6 +48,8 @@ class PathPart(pod.Object):
             
         if(new == True):
             return self.CreatePath(path[1:])
+        
+        return self
         
     def GetLastPart(self, path):
         if(path==[]):
@@ -132,9 +132,9 @@ class PathPart(pod.Object):
          
         dup= None
         if self.parent:
-            dup= PathPart(self.name+"_copy", deepcopy(self.parent, memo), deepcopy(self.PathStatus, memo), deepcopy(self.depth, memo))
+            dup= PathPart(self.name, deepcopy(self.parent, memo), deepcopy(self.PathStatus, memo), deepcopy(self.depth, memo))
         else:
-            dup= PathPart(self.name+"_copy", None, deepcopy(self.PathStatus, memo), deepcopy(self.depth, memo))
+            dup= PathPart(self.name, None, deepcopy(self.PathStatus, memo), deepcopy(self.depth, memo))
             
         return dup
             
@@ -352,6 +352,10 @@ class FileSyncConfig(pod.Object):
         self.config_layer = config_layer
         self.name= name
         
+    def __str__(self):
+        return "name:'%s', src:'%s', dst:'%s', config:'%s'" \
+             % (self.name, self.source_path, self.dest_path, self.config_layer.name)
+        
 class FileSyncConfigManager(pod.Object):
     def __init__(self):
         pod.Object.__init__(self)
@@ -382,7 +386,7 @@ class FileSync(object):
         '''
         self.file_sync_config = file_sync_config
         
-    def sync(self, base_path= ["root"]):
+    def sync(self, base_path= ["root"], verbose=True):
         if(self.file_sync_config.source_path):
             try:
                 src= fsopendir(self.file_sync_config.source_path)
@@ -401,30 +405,39 @@ class FileSync(object):
         self._synch_walk(src, dst, base_path)
         self._synch_walk(dst, src, base_path)
         
-    def _synch_walk(self, src, dst, path):
+    def _synch_walk(self, src, dst, path, depth= 0,verbose=True):
         src_files= src.listdir()
         dst_files= dst.listdir()
         config= self.file_sync_config.config_layer
         for file in src_files:
             status= config.GetPathStatus(path+[file])
+            if verbose: print "\t"*depth+"Object: "+file
             if src.isdir(file):
                 if status==PathStatus.include or status==PathStatus.ignore:
+                    if verbose: print "\t"*depth+"dir_enter->"
                     new_src= src.makeopendir(file)
                     new_dst= dst.makeopendir(file)
-                    self._synch_walk(new_src, new_dst, path[:]+[file])
+                    self._synch_walk(new_src, new_dst, path[:]+[file], depth+1)
+                    if verbose: print "\t"*depth+"<-dir_leave"
                 if status==PathStatus.stop:
+                    if verbose: print "\t"*depth+"Removing dir"
                     src.removedir(file, force=True)
             if src.isfile(file):
                 if status==PathStatus.include:
                     if file in dst_files:
+                        if verbose: print "\t"*depth+"Synching file"
                         src_mtime= src.getinfo(file)["modified_time"]
                         dst_mtime= dst.getinfo(file)["modified_time"]
+
                         if src_mtime>dst_mtime:
                             copyfile(src, file, dst, file)
+                        elif src_mtime==dst_mtime:
+                            print "\t"*depth+"Nothing to synch."
                         else:
                             copyfile(dst, file, src, file)
                     else:
                         copyfile(src, file, dst, file)
-                if status==PathStatus.stop:
+                if status==PathStatus.stop or status==PathStatus.ignore:
+                    if verbose: print "\t"*depth+"Removing file"
                     src.remove(file)
                     

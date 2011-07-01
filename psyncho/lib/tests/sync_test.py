@@ -138,7 +138,10 @@ class TestSynch(unittest.TestCase):
         result= conf2.paths.GetPathStatus(["root","jaka","file.mfd"])
         self.assertEqual(result, PathStatus.ignore)
         
+        print self.cmd.GenConfigTree(True)  
+        
         self.cmd.DelConfig("test")
+        self.cmd.DelConfig("test2")
         
 if __name__ == '__main__':
     unittest.main()

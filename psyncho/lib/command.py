@@ -1,8 +1,8 @@
 from psyncho import *
 
 class PsynchoCommand(object):
-    def __init__(self):
-        self.db = pod.Db(file = 'UnisonConfig.db', dynamic_index = True)
+    def __init__(self, db_file="psyncho_config.db"):        
+        self.db = pod.Db(file = db_file, dynamic_index = True)
         self.config_mgr=None
         self.fs_mgr=None
         
@@ -33,41 +33,92 @@ class PsynchoCommand(object):
             return "ignore"
         elif status==PathStatus.stop:
             return "stop"
-        return "undef"             
+        return "undef"           
+    
+    def Save(self):
+        self.db.commit()  
+        
+    def NewSynch(self, name, source_path, dest_path, config_name=None):
+        if not config_name:
+            config= self.current_config
+        else:
+            config= self.config_mgr.GetConfigByName(config_name)
+            
+        self.fs_mgr.AddConfig(FileSyncConfig(source_path, dest_path, config, name))
+        
+    def Synch(self, name, base_path_string="root"):
+        fsc= self.fs_mgr.GetConfigByName(name)
+        if not fsc:
+            return None
+        
+        base_path=base_path_string.split("/")
+        fs= FileSync(fsc)
+        fs.sync(base_path)
         
     def NewConfig(self, config_name, root_path_status, parent_config_name=None):
         path_status= self._StatusFromString(root_path_status)
         parent= self.config_mgr.GetConfigByName(parent_config_name)
-        return self.config_mgr.NewConfig(config_name, None, path_status, parent)
-    
-    def NewSynch(self, name, source_path, dest_path, config_name):
-        config= self.config_mgr.GetConfigByName(config_name)
-        self.fs_mgr.AddConfig(FileSyncConfig(source_path, dest_path, config, name))
+        config= self.config_mgr.NewConfig(config_name, None, path_status, parent)
+        self.current_config= config
         
-    def Synch(self, name, base_path_string="root"):
-        fs= FileSync(self.fs_mgr.GetConfigByName(name))
-        base_path=base_path_string.split("/")
-        fs.sync()
-        
+        return config
+
     def DelConfig(self, config_name):
         config= self.config_mgr.GetConfigByName(config_name)
         self.config_mgr.RemoveConfig(config)
         
+    def RenameConfig(self, old_name, new_name):
+        config= self.config_mgr.GetConfigByName(old_name)
+        config.name= new_name
+        
+    def DuplicateConfig(self, config_name):
+        config= self.config_mgr.GetConfigByName(config_name)
+        self.config_mgr.DuplicateConfig(config)
+        
     def SelectCurrentConfig(self, config_name):
         self.current_config= self.config_mgr.GetConfigByName(config_name)
         
-    def SetPathStatus(self, string_path, string_status):
-        if not self.current_config:
+    def SetPathStatus(self, string_path, string_status, config_name=None):
+        config= self.current_config
+        if (not config) and (not config_name):
             return False
+        if config_name:
+            config= self.config_mgr.GetConfigByName(config_name)
+            if not config:
+                return
+            
         status= self._StatusFromString(string_status)
         path= string_path.split("/")
-        self.current_config.paths.SetPathStatus(path, status)
         
-    def GetPathStatus(self, string_path):
-        if not self.current_config:
+        config.paths.SetPathStatus(path, status)
+        
+    def GetPathStatus(self, string_path, config_name=None):
+        config= self.current_config
+        if (not config) and (not config_name):
             return False
+        if config_name:
+            config= self.config_mgr.GetConfigByName(config_name)
+            
         path= string_path.split("/")
-        return self._StatusToString(self.current_config.GetPathStatus(path))        
+        return self._StatusToString(config.GetPathStatus(path))
+    
+    def DelPathStatus(self, string_path, config_name=None):
+        config= self.current_config
+        if (not config) and (not config_name):
+            return False
+        if config_name:
+            config= self.config_mgr.GetConfigByName(config_name)
+            
+        path= string_path.split("/")
+        
+        config.paths.DelPathPart(path)
+    
+    def GenSynchList(self):
+        out= "Synch configs:"
+        for synch in self.fs_mgr.configs:
+            out+= "-> " + synch.__str__() + "\n"
+            
+        return out      
         
     def GenPathList(self, config, depth):
         return self._GenPathListRecursive(depth, config.paths, "")
