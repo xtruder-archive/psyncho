@@ -4,6 +4,9 @@ include/*
 build/*
 layered_sync.egg-info/*
 pyfilesystem/*
+psyncho.egg-info/*
+man/*
 *.pyc
 *.db
 *.db-journal
+

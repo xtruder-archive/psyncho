@@ -1,4 +1,3 @@
-#!/home/offlinehacker/projects/UnisonConfig/bin/python
 import os
 
 from optparse import OptionParser

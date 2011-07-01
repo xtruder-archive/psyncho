@@ -1,5 +1,5 @@
 import os
-from setuptools import setup
+from setuptools import setup, find_packages
 
 # Utility function to read the README file.
 # Used for the long_description.  It's nice, because now 1) we have a 
@@ -12,14 +12,14 @@ def read(fname):
 
 setup(
     name = "psyncho",
-    version = "0.0.4",
+    version = "0.1",
     author = "Jaka Hudoklin",
     author_email = "jakahudoklin@gmail.com",
     description = ("Synching files with layers :)"),
     license = "BSD",
     keywords = "file synch layers",
     url = "http://packages.python.org/an_example_pypi_project",
-    packages=['psyncho','psyncho/lib'],
+    packages=find_packages(),
     long_description=read('README'),
     classifiers=[
         "Development Status :: 3 - Alpha",
@@ -27,4 +27,8 @@ setup(
         "License :: OSI Approved :: BSD License",
     ],
     install_requires = [ "pod", "fs", "ez_setup" ],
+    entry_points="""
+    [console_scripts]
+    psyncho = psyncho.cli:main
+    """,
 )
