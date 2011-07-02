@@ -52,7 +52,7 @@ class PsynchoCommand(object):
             return None
         
         base_path=base_path_string.split("/")
-        fs= FileSync(fsc)
+        fs= FileSync(fsc, self.db)
         fs.sync(base_path)
         
     def NewConfig(self, config_name, root_path_status, parent_config_name=None):

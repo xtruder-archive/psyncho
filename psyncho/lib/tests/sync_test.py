@@ -86,7 +86,7 @@ class TestSynch(unittest.TestCase):
     def test_Synch(self):
         dirs1=["a/m/file.txt", "a/file.txt","b/c/file.txt","c"]
         self.Makedirs(self.CurrentDir()+"/testdirs","test1",dirs1)
-        self.Makedirs(self.CurrentDir()+"/testdirs","test2",dirs1)
+        self.Makedirs(self.CurrentDir()+"/testdirs","test2",[""])
         self.cmd.NewConfig("test", "include", None)
         self.cmd.SelectCurrentConfig("test")
         self.cmd.SetPathStatus("root/a", "ignore")
