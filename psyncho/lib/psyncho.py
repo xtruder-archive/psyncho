@@ -7,6 +7,8 @@ from fs.opener import fsopendir
 from fs.utils import copyfile
 from copy import deepcopy
 from datetime import timedelta
+from datetime import datetime
+from time import mktime
 
 class Enumerate(object):
     def __init__(self, names):
@@ -52,15 +54,22 @@ class PathPart(pod.Object):
         
         return self
         
-    def GetLastPart(self, path):
+    def GetLastPart(self, path, report_truncated= False):
         if(path==[]):
-            return self.parent
+            if report_truncated:
+                return (False, self.parent)
+            else:
+                return self.parent
+
         match1= re.match('^\{(?P<regex>\S+)\}$',self.name)
         match2= re.match('^\|(?P<regex>\S+)\|$',self.name)
         if match1:
             regex= match1.group('regex')
             if not re.match(regex, path[0]):
-                return None
+                if report_truncated:
+                    return (False,None)
+                else:
+                    return None
         elif match2:
             regex= match2.group('regex')
             stringpath= '/'.join(path)
@@ -68,17 +77,36 @@ class PathPart(pod.Object):
             if splited[0]!=stringpath and len(stringpath)>len(splited[1]):
                 path= splited[1].split("/")
             else:
-                return None
+                if report_truncated:
+                    return (False,None)
+                else:
+                    return None
         elif(self.name!=path[0]):
-            return None
+            if report_truncated:
+                return (False,None)
+            else:
+                return None
             
         for child in self.children:
-            tpathPart= child.GetLastPart(path[1:])
+            if report_truncated:
+                (truncated, tpathPart)= child.GetLastPart(path[1:], report_truncated)
+            else:
+                tpathPart= child.GetLastPart(path[1:], report_truncated)
             if(tpathPart!=None):
-                return tpathPart
+                if report_truncated:
+                    return (truncated,tpathPart)
+                else:
+                    return tpathPart 
+                
+        #That's the key and only point where we report truncated
+        if report_truncated and len(path[1:])>0:
+            return (True, self)
+         
+        if report_truncated:
+            return (False,self)
+        else:
+            return self
             
-        return self
-        
     def DelPathPart(self, path):
         tpathPart= self.GetPathPart(path, False)
         if(tpathPart==None):
@@ -152,40 +180,60 @@ class ConfigLayer(pod.Object):
         self.paths= PathPart("root")
         self.paths.PathStatus= lPathStatus
         
-    def GetPathStatus(self, path):
+    def GetPathStatus(self, path, report_truncated= False, previous_truncated=None):
         depth= len(path)
-        tpathPart= self.paths.GetLastPart(path)
-        if(tpathPart.PathStatus==PathStatus.stop):
-            return PathStatus.stop
-        if(tpathPart.PathStatus==PathStatus.undef):
-            return self.__GetPathStatus__(path, self, self.paths, depth)
+        if report_truncated:
+            (previous_truncated, tpathPart)= self.paths.GetLastPart(path, report_truncated)
         else:
-            return self.__GetPathStatus__(path, self, tpathPart, depth)
+            tpathPart= self.paths.GetLastPart(path)
+        if(tpathPart.PathStatus==PathStatus.stop):
+            if report_truncated:
+                return (False,PathStatus.stop)
+            else:
+                return PathStatus.stop
+        if(tpathPart.PathStatus==PathStatus.undef):
+            return self.__GetPathStatus__(path, self, self.paths, depth, report_truncated, previous_truncated)
+        else:
+            return self.__GetPathStatus__(path, self, tpathPart, depth, report_truncated, previous_truncated)
         
-    def __GetPathStatus__(self, path, parent, previousBest, depth):
+    def __GetPathStatus__(self, path, parent, previousBest, depth, report_truncated= False, previous_truncated=None):
         if(parent.parent==None):
-            return previousBest.PathStatus
+            if report_truncated:
+                return (previous_truncated,previousBest.PathStatus)
+            else:
+                return previousBest.PathStatus
         
-        tpathPart= parent.parent.paths.GetLastPart(path)
+        if report_truncated:
+            (truncated, tpathPart)= parent.parent.paths.GetLastPart(path, report_truncated)
+        else:
+            tpathPart= parent.parent.paths.GetLastPart(path)
         
         'If we must stop at speciffic path then return status to stop'
         if(tpathPart.PathStatus==PathStatus.stop):
-            return PathStatus.stop
+            if report_truncated:
+                return (truncated, PathStatus.stop)
+            else:
+                return PathStatus.stop
         
         'if path status is not defined go to next parent'
         if(tpathPart.PathStatus==PathStatus.undef):
-            return self.__GetPathStatus__(path, parent.parent, previousBest, depth)
+            return self.__GetPathStatus__(path, parent.parent, previousBest, depth, report_truncated, previous_truncated)
         
         sum1= depth-previousBest.depth
         sum2= depth-tpathPart.depth
         
         if( sum2>0 and sum2<sum1):
             previousBest= tpathPart
+            if report_truncated:
+                previous_truncated= truncated
             
         if(parent.parent.parent==None):
-            return previousBest.PathStatus;
+            if report_truncated:
+                return (previous_truncated, previousBest.PathStatus)
+            else:
+                return previousBest.PathStatus;
             
-        return self.__GetPathStatus__(path, parent.parent, previousBest, depth)
+        return self.__GetPathStatus__(path, parent.parent, previousBest, depth, report_truncated, previous_truncated)
     
     def GetConfigByPath(self, path):
         if self.name != path[0]:
@@ -336,23 +384,25 @@ class ConfigLayerManager(pod.Object):
             break
         
 class FileIndex(pod.Object):
-    def __init__(self, name, parent= None, CreationTime= None, depth= 0):
+    name = pod.typed.String(index = True) 
+    CreationTime= pod.typed.Time(index = False)
+    
+    def __init__(self, name, parent= None, CreationTime= None):
         pod.Object.__init__(self)
         
         self.name= name
-        self.CreationTime= CreationTime
+        self.CreationTime= CreationTime    
         
-        self.children= []
+        self.children= pod.list.List()
         self.parent= parent
         if parent!=None:
             self.parent.children.append(self)
-        self.depth= depth
                 
     def AddPath(self, path, CreationTime= None):
         if(path==[]):
             return self
         
-        tpathPart=FileIndex(path[0], self, CreationTime, self.depth+1)
+        tpathPart=FileIndex(path[0], self, CreationTime)
         
         return tpathPart.AddPath(path[1:])   
         
@@ -472,6 +522,7 @@ class FileSync(object):
         @type file_sync_config: FileSyncConfig
         '''
         self.file_sync_config = file_sync_config
+        self.cache_file_status= True
         
     def SmallTime(self, time1, time2):
         if abs(time1 - time2)<timedelta(seconds=1):
@@ -495,69 +546,172 @@ class FileSync(object):
         else:
             return
         
-        self._synch_walk(src, dst, base_path, self.file_sync_config.src_index, self.file_sync_config.dst_index)
-        self._synch_walk(dst, src, base_path, self.file_sync_config.dst_index, self.file_sync_config.src_index)
+        self._synch_walk(src, dst, base_path, self.file_sync_config.src_index, self.file_sync_config.dst_index, self.file_sync_config.config_layer)
         
-    def _synch_walk(self, src, dst, path, src_i, dst_i, depth= 0,verbose=True):
+    def dt2ut(self, date):
+        return int(mktime(date.timetuple()))
+    
+    def ut2dt(self, date):
+        return datetime.fromtimestamp(date)
+        
+    def _synch_walk(self, src, dst, path, src_i, dst_i, config, depth= 0, cached_status= None,verbose=True):
         src_files= src.listdir()
         dst_files= dst.listdir()
-        config= self.file_sync_config.config_layer
-        for file in src_files:
-            status= config.GetPathStatus(path+[file])
+        
+        copy_src_files = [i for i in src_files if src.isfile(i) and (i not in dst_files or dst.isdir(i))]
+        copy_src_dirs = [i for i in src_files if src.isdir(i) and (i not in dst_files or dst.isfile(i))]
+        copy_dst_files = [i for i in dst_files if dst.isfile(i) and (i not in src_files or src.isdir(i))]
+        copy_dst_dirs = [i for i in dst_files if dst.isdir(i) and (i not in dst_files or src.isfile(i))]
+        update_files = [i for i in src_files if i not in copy_src_files+copy_src_dirs+copy_dst_files+copy_dst_dirs]
+        
+        status= cached_status
+        if cached_status:
+            truncated= True
+        
+        for file in copy_src_files:
             if verbose: print "\t"*depth+"Object: "+file
+            if not cached_status or not self.cache_file_status:
+                status= config.GetPathStatus(path+[file])
+            if status==PathStatus.include:
+                src_index= None
+                dst_index= None
+                src_mtime= src.getinfo(file)["modified_time"]
+                src_filesize= src.getsize(file)
+                
+                copyfile(src, file, dst, file)
+                if src_filesize>1000:
+                    print "Sync synch synch..............................."
+                    src_index= src_i.GetPathPart(path+[file], True)
+                    dst_index= dst_i.GetPathPart(path+[file], True)
+                    src_index.CreationTime= self.dt2ut(src_mtime)
+                    dst_index.CreationTime= self.dt2ut(dst.getinfo(file)["modified_time"])   
+            if status==PathStatus.stop:
+                if verbose: print "\t"*depth+"Removing file"
+                src.remove(file)  
+                
+        for file in copy_src_dirs:
+            if verbose: print "\t"*depth+"Object: "+file
+            l_cached_status= None
+            if not cached_status:
+                (truncated, status)= config.GetPathStatus(path+[file], True)
+            if truncated:
+                l_cached_status= status
+            if status==PathStatus.include or (status==PathStatus.ignore and not truncated):
+                if verbose: print "\t"*depth+"dir_enter->"
+                new_src= src.makeopendir(file)
+                new_dst= dst.makeopendir(file)
+                self._synch_walk(new_src, new_dst, path[:]+[file], src_i, dst_i, config, depth+1, l_cached_status)
+                if verbose: print "\t"*depth+"<-dir_leave"
+            if status==PathStatus.stop:
+                if verbose: print "\t"*depth+"Removing dir"
+                src.removedir(file, force=True)
+
+        for file in copy_dst_files:
+            if verbose: print "\t"*depth+"Object: "+file
+            if not cached_status or not self.cache_file_status:
+                status= config.GetPathStatus(path+[file])
+            if status==PathStatus.include:
+                src_index= None
+                dst_index= None
+                dst_mtime= dst.getinfo(file)["modified_time"]
+                dst_filesize= dst.getsize(file)
+                
+                copyfile(dst, file, src, file)
+                if dst_filesize>1000:
+                    print "Sync synch synch..............................."
+                    src_index= src_i.GetPathPart(path+[file], True)
+                    dst_index= dst_i.GetPathPart(path+[file], True)
+                    dst_index.CreationTime= self.dt2ut(dst_mtime)
+                    src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])   
+            if status==PathStatus.stop:
+                if verbose: print "\t"*depth+"Removing file"
+                dst.remove(file)  
+                
+        for file in copy_dst_dirs:
+            if verbose: print "\t"*depth+"Object: "+file
+            l_cached_status= None
+            if not cached_status:
+                (truncated, status)= config.GetPathStatus(path+[file], True)
+            if truncated:
+                l_cached_status= status
+            if status==PathStatus.include or (status==PathStatus.ignore and not truncated):
+                if verbose: print "\t"*depth+"dir_enter->"
+                new_src= src.makeopendir(file)
+                new_dst= dst.makeopendir(file)
+                self._synch_walk(new_src, new_dst, path[:]+[file], src_i, dst_i, config, depth+1, l_cached_status)
+                if verbose: print "\t"*depth+"<-dir_leave"
+            if status==PathStatus.stop:
+                if verbose: print "\t"*depth+"Removing dir"
+                dst.removedir(file, force=True)
+                    
+        #When we update, we must make shure that we walk also dirs, because
+        #sometimes, rules are souch that we must delete some dirs.
+        for file in update_files:
+            if verbose: print "\t"*depth+"Object: "+file
+            if not cached_status or not self.cache_file_status:
+                (truncated, status)= config.GetPathStatus(path+[file], True)
+            if truncated:
+                cached_status= status
             if src.isdir(file):
-                if status==PathStatus.include or status==PathStatus.ignore:
+                if status==PathStatus.include or (status==PathStatus.ignore and not truncated):
                     if verbose: print "\t"*depth+"dir_enter->"
                     new_src= src.makeopendir(file)
                     new_dst= dst.makeopendir(file)
-                    self._synch_walk(new_src, new_dst, path[:]+[file], src_i, dst_i, depth+1)
+                    self._synch_walk(new_src, new_dst, path[:]+[file], src_i, dst_i, config, depth+1, cached_status)
                     if verbose: print "\t"*depth+"<-dir_leave"
                 if status==PathStatus.stop:
                     if verbose: print "\t"*depth+"Removing dir"
-                    src.removedir(file, force=True)
-            if src.isfile(file):
+                    src.removedir(file, force=True) 
+                    dst.removedir(file, force=True)   
+            elif src.isfile(file):
                 if status==PathStatus.include:
-                    src_index= src_i.GetPathPart(path+[file], True)
-                    dst_index= dst_i.GetPathPart(path+[file], True)
-                    if file in dst_files:
-                        src_mtime= src.getinfo(file)["modified_time"]
-                        dst_mtime= dst.getinfo(file)["modified_time"]
-                        
-                        if verbose: print "\t"*depth+"Synching file"
-                        if src_index.CreationTime==None or dst_index.CreationTime==None:
+                    src_index= None
+                    dst_index= None
+                    src_mtime= src.getinfo(file)["modified_time"]
+                    src_filesize= src.getsize(file)
+                    dst_mtime= dst.getinfo(file)["modified_time"]
+                    dst_filesize= dst.getsize(file)
+                    
+                    if verbose: print "\t"*depth+"Synching file"
+                    if src_filesize>1000 or dst_filesize>1000:
+                        src_index= src_i.GetPathPart(path+[file], True)
+                        dst_index= dst_i.GetPathPart(path+[file], True)
+                    if src_index==None or dst_index==None:
+                        if src_mtime>dst_mtime:
+                            copyfile(src, file, dst, file)
+                        else:
+                            copyfile(dst, file, src, file)
+                    elif src_index.CreationTime==None or dst_index.CreationTime==None:
+                        if src_mtime>dst_mtime:
+                            copyfile(src, file, dst, file)
+                            src_index.CreationTime= self.dt2ut(src_mtime)
+                            dst_index.CreationTime= self.dt2ut(dst.getinfo(file)["modified_time"])
+                        else:
+                            copyfile(dst, file, src, file)
+                            dst_index.CreationTime= self.dt2ut(dst_mtime)
+                            src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])
+                    else:    
+                        #both files are unchanged
+                        if self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)) and self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
+                            if verbose: print "\t"*depth+"Both files are synched"
+                        #src has changed and dst has not
+                        elif self.ut2dt(src_index.CreationTime)<src_mtime and self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
+                            if verbose: print "\t"*depth+"Src file has changed, but dst not"
+                            copyfile(src, file, dst, file)
+                            dst_index.CreationTime= dst.getinfo(file)["modified_time"]
+                        #dst has changed and src has not
+                        elif self.ut2dt(dst_index.CreationTime)<dst_mtime and self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)):
+                            if verbose: print "\t"*depth+"Dst file has changed, but src not"
+                            copyfile(dst, file, src, file)
+                            src_index.CreationTime= src.getinfo(file)["modified_time"]
+                        #both files has changed, update indexes 
+                        elif not self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)) and not self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
+                            if verbose: print "\t"*depth+"Both files has changed."
                             if src_mtime>dst_mtime:
                                 copyfile(src, file, dst, file)
-                                src_index.CreationTime= src_mtime
-                                dst_index.CreationTime= dst.getinfo(file)["modified_time"]
+                                src_index.CreationTime= self.dt2ut(src_mtime)
+                                dst_index.CreationTime= self.dt2ut(dst.getinfo(file)["modified_time"])
                             else:
                                 copyfile(dst, file, src, file)
-                                dst_index.CreationTime= dst_mtime
-                                src_index.CreationTime= src.getinfo(file)["modified_time"]
-                        else:    
-                            #both files are unchanged
-                            if self.SmallTime(src_mtime, src_index.CreationTime) and self.SmallTime(dst_mtime, dst_index.CreationTime):
-                                if verbose: print "\t"*depth+"Both files are synched"
-                            #src has changed and dst has not
-                            elif src_index.CreationTime<src_mtime and self.SmallTime(dst_mtime, dst_index.CreationTime):
-                                copyfile(src, file, dst, file)
-                                dst_index.CreationTime= dst.getinfo(file)["modified_time"]
-                                print dst_index.CreationTime-dst_mtime
-                                if verbose: print "\t"*depth+"Src file has changed, but dst not"
-                            #both files has changed, update indexes 
-                            elif not self.SmallTime(src_mtime, src_index.CreationTime) and not self.SmallTime(dst_mtime, dst_index.CreationTime):
-                                print str(abs(src_mtime-src_index.CreationTime))+" "+str(abs(dst_mtime-dst_index.CreationTime))
-                                if verbose: print "\t"*depth+"Both files has changed."
-                                if src_mtime>dst_mtime:
-                                    copyfile(src, file, dst, file)
-                                    src_index.CreationTime= src_mtime
-                                    dst_index.CreationTime= dst.getinfo(file)["modified_time"]
-                                else:
-                                    copyfile(dst, file, src, file)
-                                    dst_index.CreationTime= dst_mtime
-                                    src_index.CreationTime= src.getinfo(file)["modified_time"]                             
-                    else:
-                        copyfile(src, file, dst, file)
-                if status==PathStatus.stop:
-                    if verbose: print "\t"*depth+"Removing file"
-                    src.remove(file)
-                    
+                                dst_index.CreationTime= self.dt2ut(dst_mtime)
+                                src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])                    

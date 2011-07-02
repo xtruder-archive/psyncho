@@ -86,7 +86,7 @@ class TestSynch(unittest.TestCase):
     def test_Synch(self):
         dirs1=["a/m/file.txt", "a/file.txt","b/c/file.txt","c"]
         self.Makedirs(self.CurrentDir()+"/testdirs","test1",dirs1)
-        self.Makedirs(self.CurrentDir()+"/testdirs","test2",[""])
+        self.Makedirs(self.CurrentDir()+"/testdirs","test2",dirs1)
         self.cmd.NewConfig("test", "include", None)
         self.cmd.SelectCurrentConfig("test")
         self.cmd.SetPathStatus("root/a", "ignore")
@@ -96,7 +96,7 @@ class TestSynch(unittest.TestCase):
         self.cmd.SelectCurrentConfig("test2")
         self.cmd.SetPathStatus("root/a/m/file.txt", "include")
         self.cmd.SetPathStatus("root/a/file.txt", "include")
-        self.cmd.SetPathStatus("root/b/c/file.txt", "stop")
+        self.cmd.SetPathStatus("root/b/c/file.txt", "include")
         
         self.cmd.NewConfig("test2", "include", "test->test2")
         
@@ -105,7 +105,7 @@ class TestSynch(unittest.TestCase):
         
         print self.cmd.GenConfigTree(True)     
         
-        correct_dirs=["a/m/file.txt","b/c", "a/file.txt"]
+        correct_dirs=["a/m/file.txt","b/c", "a/file.txt", "b/c/file.txt"]
         self.Checkdirs(self.CurrentDir()+"/testdirs","test1",dirs1,correct_dirs)
         self.Checkdirs(self.CurrentDir()+"/testdirs","test2",dirs1,correct_dirs)
         
