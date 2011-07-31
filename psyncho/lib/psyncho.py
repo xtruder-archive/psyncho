@@ -2,6 +2,8 @@ import pod
 import pod.list
 import os
 import re
+import fs
+import stat
 
 from fs.opener import fsopendir
 from fs.utils import copyfile
@@ -150,8 +152,8 @@ class PathPart(pod.Object):
         
     def pre_delete(self):
         for child in self.children:
+            self.children.remove(child)
             child.delete()
-            break
         
     def __deepcopy__(self, memo):
         not_there = []
@@ -269,10 +271,9 @@ class ConfigLayer(pod.Object):
         return last_parent
         
     def pre_delete(self):
-        #Only delete first child
         for child in self.children:
+            self.children.remove(child)
             child.delete()
-            break
         
         self.paths.delete()
         
@@ -380,8 +381,8 @@ class ConfigLayerManager(pod.Object):
         Erases all config layers.
         '''
         for config in self.configs:
+            self.configs.remove(config)
             config.delete()
-            break
         
 class FileIndex(pod.Object):
     name = pod.typed.String(index = True) 
@@ -445,8 +446,10 @@ class FileIndex(pod.Object):
         
     def pre_delete(self):
         for child in self.children:
+            self.children.remove(child)
             child.delete()
-            break
+
+        self.children.delete()
         
     def __deepcopy__(self, memo):
         not_there = []
@@ -563,35 +566,50 @@ class FileSync(object):
         
         #This operations are considered slow,
         #so we want to do them only once.
-        src_f= [i for i in src_files if src.isfile(i)]
-        src_d= [i for i in src_files if src.isdir(i)]
-        dst_f= [i for i in dst_files if dst.isfile(i)]
-        dst_d= [i for i in dst_files if dst.isdir(i)]
+        src_info= [src.getinfo(i) for i in src_files]
+        dst_info= [src.getinfo(i) for i in src_files]
+        
+        src_f= []
+        src_d= []
+        src_l=[]
+        for id, i in enumerate(src_files):
+            if stat.S_ISREG( src_info[id]["st_mode"] ): src_f.append( (i,src_info[id]) )
+            elif stat.S_ISDIR( src_info[id]["st_mode"] ): src_d.append( (i,src_info[id]) )
+            elif stat.S_ISLNK( src_info[id]["st_mode"] ): src_l.append( (i,src_info[id]) )
+            
+        dst_f= []
+        dst_d= []
+        dst_l=[]
+        for id, i in enumerate(dst_files):
+            if stat.S_ISREG( dst_info[id]["st_mode"] ): dst_f.append( (i,dst_info[id]) )
+            elif stat.S_ISDIR( dst_info[id]["st_mode"] ): dst_d.append( (i,dst_info[id]) )
+            elif stat.S_ISLNK( dst_info[id]["st_mode"] ): dst_l.append( (i,dst_info[id]) )
+
         #This operations are considered fast
-        copy_src_files = [i for i in src_f if i not in dst_files or i in dst_d]
-        copy_src_dirs = [i for i in src_d if i not in dst_files or i in dst_f]
-        copy_dst_files = [i for i in dst_f if i not in src_files or i in src_d]
-        copy_dst_dirs = [i for i in dst_d if i not in src_files or i in src_f]
+        copy_src_files = [(i,info) for i, info in src_f if i not in dst_files or (i, info) in dst_d]
+        copy_src_dirs = [(i,info) for i, info in src_d if i not in dst_files or (i, info) in dst_f]
+        copy_dst_files = [(i,info) for i, info in dst_f if i not in src_files or (i, info) in src_d]
+        copy_dst_dirs = [(i,info) for i, info in dst_d if i not in src_files or (i, info) in src_f]
         #Update files are in src and dst the same.
         #Files that are not in those files we are about to copy.
-        update_files = [i for i in src_f if i not in copy_src_files]
+        update_files = [i for i, info in src_f if (i, info) not in copy_src_files]
         print update_files
         #Dirs that are not in those dirs we are about to copy.
-        update_dirs = [i for i in src_d if i not in copy_src_dirs]
+        update_dirs = [i for i, info in src_d if (i, info) not in copy_src_dirs]
         
         status= cached_status
         if cached_status:
             truncated= True
         
-        for file in copy_src_files:
+        for file, info in copy_src_files:
             if verbose: print "\t"*depth+"Object: "+file
             if not cached_status or not self.cache_file_status:
                 status= config.GetPathStatus(path+[file])
             if status==PathStatus.include:
                 src_index= None
                 dst_index= None
-                src_mtime= src.getinfo(file)["modified_time"]
-                src_filesize= src.getsize(file)
+                src_mtime= info["modified_time"]
+                src_filesize= info["size"]
                 
                 try:
                     copyfile(src, file, dst, file)
@@ -607,7 +625,7 @@ class FileSync(object):
                 if verbose: print "\t"*depth+"Removing file"
                 src.remove(file)  
                 
-        for file in copy_src_dirs:
+        for file, info in copy_src_dirs:
             if verbose: print "\t"*depth+"Object: "+file
             l_cached_status= None
             if not cached_status:
@@ -624,15 +642,15 @@ class FileSync(object):
                 if verbose: print "\t"*depth+"Removing dir"
                 src.removedir(file, force=True)
 
-        for file in copy_dst_files:
+        for file, info in copy_dst_files:
             if verbose: print "\t"*depth+"Object: "+file
             if not cached_status or not self.cache_file_status:
                 status= config.GetPathStatus(path+[file])
             if status==PathStatus.include:
                 src_index= None
                 dst_index= None
-                dst_mtime= dst.getinfo(file)["modified_time"]
-                dst_filesize= dst.getsize(file)
+                dst_mtime= info["modified_time"]
+                dst_filesize= info["size"]
                 
                 try:
                     copyfile(dst, file, src, file)
@@ -648,7 +666,7 @@ class FileSync(object):
                 if verbose: print "\t"*depth+"Removing file"
                 dst.remove(file)  
                 
-        for file in copy_dst_dirs:
+        for file, info in copy_dst_dirs:
             if verbose: print "\t"*depth+"Object: "+file
             l_cached_status= None
             if not cached_status:

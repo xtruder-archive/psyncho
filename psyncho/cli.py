@@ -1,6 +1,7 @@
 import os
 
 from optparse import OptionParser
+import cProfile
 
 from lib.command import PsynchoCommand
 
@@ -44,6 +45,7 @@ def main():
     ps= None
     if options.config_file:
         ps= PsynchoCommand(options.config_file)
+	print "Config file "+options.config_file
     else:
         ps= PsynchoCommand()
         
@@ -100,7 +102,7 @@ def main():
         path= "root"
         if len(args)>1:
             path= args[1]
-        ps.Synch(name, path)
+        ps.Synch(name,path)
     elif options.init:
         open('.psyncho', 'w').close() 
     elif options.add and len(args)>2:
