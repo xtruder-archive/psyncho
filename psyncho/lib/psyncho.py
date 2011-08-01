@@ -627,9 +627,11 @@ class FileSync(object):
         #src->dst
         self._copy_files(src, dst, path, src_i, dst_i, copy_src_files, truncated, depth, cached_status, verbose)
         self._copy_dirs(src, dst, path, src_i, dst_i, copy_src_dirs, truncated, depth, cached_status, verbose)
+        self._make_links(src, dst, path, src_i, dst_i, make_src_links, truncated, depth, cached_status, verbose)
         #dst->src
         self._copy_files(dst, src, path, dst_i, src_i, copy_dst_files, truncated, depth, cached_status, verbose)
         self._copy_dirs(dst, src, path, dst_i, src_i, copy_dst_dirs, truncated, depth, cached_status, verbose)
+        self._make_links(dst, src, path, dst_i, src_i, make_dst_links, truncated, depth, cached_status, verbose)
         #dst<->src
         self._update_files(src, dst, path, src_i, dst_i, update_files, truncated, depth, cached_status, verbose)
         self._update_dirs(src, dst, path, src_i, dst_i, update_dirs, truncated, depth, cached_status, verbose)
@@ -691,6 +693,7 @@ class FileSync(object):
             if verbose: print "\t"*depth+"Object: "+file
             if not cached_status or not self.cache_file_status:
                 (truncated, status)= self.config.GetPathStatus(path+[file], True)
+                
             if status==PathStatus.include:
                 src_index= None
                 dst_index= None
@@ -703,6 +706,7 @@ class FileSync(object):
                 if src_filesize>1000 or dst_filesize>1000:
                     src_index= src_i.GetPathPart([src_i.name,file], True)
                     dst_index= dst_i.GetPathPart([dst_i.name,file], True)
+                #If we get error when getting indexes, just action based on scr or dst mtime
                 if src_index==None or dst_index==None:
                     if src_mtime>dst_mtime:
                         try:
@@ -714,6 +718,7 @@ class FileSync(object):
                             copyfile(dst, file, src, file)
                         except:
                             continue
+                #Create index time, if it does not exist yet.
                 elif src_index.CreationTime==None or dst_index.CreationTime==None:
                     if verbose: print "\t"*depth+"No index time found."
                     if src_mtime>dst_mtime:
@@ -730,6 +735,7 @@ class FileSync(object):
                             continue
                         dst_index.CreationTime= self.dt2ut(dst_mtime)
                         src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])
+                #When indexes exist
                 else:    
                     #both files are unchanged
                     if self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)) and self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
@@ -767,6 +773,11 @@ class FileSync(object):
                                 continue
                             dst_index.CreationTime= self.dt2ut(dst_mtime)
                             src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])
+            #If we have stop on file just delete it on both sides
+            if status==PathStatus.stop:
+                if verbose: print "\t"*depth+"Removing file"
+                src.remove(file)
+                dst.remove(file)
                             
     def _update_dirs(self, src, dst, path, src_i, dst_i, dirs, truncated= False,depth= 0, cached_status= None,verbose=True):
         status= cached_status
@@ -799,6 +810,101 @@ class FileSync(object):
                 lnk= src.readlink(link)
                 if verbose: print "\t"*depth+"Creating link to"+lnk
                 dst.symlink(lnk, link)
-            elif status==PathStatus.ignore or status==PathStatus.stop:
+            elif status==PathStatus.stop:
                 if verbose: print "\t"*depth+"Removing link"
-                src.remove(link) 
+                src.remove(link)
+                
+    def _update_links(self, src, dst, path, src_i, dst_i, links, truncated= False,depth= 0, cached_status= None,verbose=True):
+        for link, sinfo, dinfo in links:
+            if verbose: print "\t"*depth+"Object: "+file
+            if not cached_status or not self.cache_file_status:
+                (truncated, status)= self.config.GetPathStatus(path+[file], True)
+            if truncated:
+                cached_status= status
+            if status==PathStatus.include:
+                #Links point to same location, do nothing.
+                slnk= src.readlink(link)
+                dlnk= dst.readlink(link)
+                if slnk==dlnk: continue
+                
+                #In case links are different use
+                src_index= None
+                dst_index= None
+                src_mtime= sinfo["modified_time"]
+                dst_mtime= dinfo["modified_time"]
+                
+                if verbose: print "\t"*depth+"Synching file"
+                src_index= src_i.GetPathPart([src_i.name,file], True)
+                dst_index= dst_i.GetPathPart([dst_i.name,file], True)
+                #If we get error when getting indexes, just action based on scr or dst mtime
+                if src_index==None or dst_index==None:
+                    if src_mtime>dst_mtime:
+                        try:
+                            dst.remove(link)
+                            dst.symlink(slnk, link)
+                        except: continue
+                    else:
+                        try:
+                            src.remove(link)
+                            src.symlink(dlnk, link)
+                        except: continue
+                #Create index time, if it does not exist yet.
+                elif src_index.CreationTime==None or dst_index.CreationTime==None:
+                    if verbose: print "\t"*depth+"No index time found."
+                    if src_mtime>dst_mtime:
+                        try:
+                            dst.remove(link)
+                            dst.symlink(slnk, link)
+                        except: continue
+                        src_index.CreationTime= self.dt2ut(src_mtime)
+                        dst_index.CreationTime= self.dt2ut(dst.getinfo(file)["modified_time"])
+                    else:
+                        try:
+                            src.remove(link)
+                            src.symlink(dlnk, link)
+                        except: continue
+                        dst_index.CreationTime= self.dt2ut(dst_mtime)
+                        src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])
+                #When indexes exist
+                else:    
+                    #both files are unchanged
+                    if self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)) and self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
+                        if verbose: print "\t"*depth+"Both files are synched"
+                    #src has changed and dst has not
+                    elif self.ut2dt(src_index.CreationTime)<src_mtime and self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
+                        if verbose: print "\t"*depth+"Src file has changed, but dst not"
+                        try:
+                            dst.remove(link)
+                            dst.symlink(slnk, link)
+                        except: continue
+                        dst_index.CreationTime= self.dt2ut(dst.getinfo(file)["modified_time"])
+                    #dst has changed and src has not
+                    elif self.ut2dt(dst_index.CreationTime)<dst_mtime and self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)):
+                        if verbose: print "\t"*depth+"Dst file has changed, but src not"
+                        try:
+                            src.remove(link)
+                            src.symlink(dlnk, link)
+                        except: continue
+                        src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])
+                    #both files has changed, update indexes 
+                    elif not self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)) and not self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
+                        if verbose: print "\t"*depth+"Both files has changed."
+                        if src_mtime>dst_mtime:
+                            try:
+                                dst.remove(link)
+                                dst.symlink(slnk, link)
+                            except: continue
+                            src_index.CreationTime= self.dt2ut(src_mtime)
+                            dst_index.CreationTime= self.dt2ut(dst.getinfo(file)["modified_time"])
+                        else:
+                            try:
+                                src.remove(link)
+                                src.symlink(dlnk, link)
+                            except: continue
+                            dst_index.CreationTime= self.dt2ut(dst_mtime)
+                            src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])
+            #if we have stop on link just delete it on both sides
+            elif status==PathStatus.stop:
+                if verbose: print "\t"*depth+"Removing link"
+                src.remove(link)
+                dst.remove(link)
