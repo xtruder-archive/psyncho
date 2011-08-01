@@ -579,7 +579,7 @@ class FileSync(object):
             if stat.S_ISREG( src_info[id]["st_mode"] ): src_f.append( (i,src_info[id]) )
             elif stat.S_ISDIR( src_info[id]["st_mode"] ): src_d.append( (i,src_info[id]) )
             elif stat.S_ISLNK( src_info[id]["st_mode"] ): src_l.append( (i,src_info[id]) )
-            else: pass #If file/dir is something we don't know we just pass
+            else: pass #If file/dir is something we don't know we just pass.
             
         dst_f= []
         dst_d= []
@@ -588,21 +588,36 @@ class FileSync(object):
             if stat.S_ISREG( dst_info[id]["st_mode"] ): dst_f.append( (i,dst_info[id]) )
             elif stat.S_ISDIR( dst_info[id]["st_mode"] ): dst_d.append( (i,dst_info[id]) )
             elif stat.S_ISLNK( dst_info[id]["st_mode"] ): dst_l.append( (i,dst_info[id]) )
-            else: pass #If file/dir is something we don't know we just pass
+            else: pass #If file/dir is something we don't know we just pass.
 
         #This operations are considered fast
+        #Src
         copy_src_files = [(i,info) for i, info in src_f if i not in dst_files or (i, info) in dst_d]
-        copy_src_dirs = [(i,info) for i, info in src_d if i not in dst_files or (i, info) in dst_f]
+        copy_src_dirs = [i for i, info in src_d if i not in dst_files or (i, info) in dst_f]
+        make_src_links = [(i,info) for i, info in src_l if i not in dst_files]
+        #Dst
         copy_dst_files = [(i,info) for i, info in dst_f if i not in src_files or (i, info) in src_d]
-        copy_dst_dirs = [(i,info) for i, info in dst_d if i not in src_files or (i, info) in src_f]
+        copy_dst_dirs = [i for i, info in dst_d if i not in src_files or (i, info) in src_f]
+        make_dst_links = [(i,info) for i, info in dst_l if i not in src_files]
         
         #Update files are in src and dst the same.
         #Files that are not in those files we are about to copy.
-        update_files = [i for i, info in src_f if (i, info) not in copy_src_files]
+        update_files=[]
+        for i1, sinfo in src_f:
+            if (i1, sinfo) not in copy_src_files:
+                for i2, dinfo in dst_f:
+                    if i1==i2: update_files.append((i1, sinfo, dinfo))
         print update_files
         #Dirs that are not in those dirs we are about to copy.
-        update_dirs = [i for i, info in src_d if (i, info) not in copy_src_dirs]
-        
+        update_dirs=[]
+        for i1, sinfo in src_d:
+            if (i1, sinfo) not in copy_src_dirs: update_dirs.append(i1)
+        update_links=[]
+        for i1, sinfo in src_d:
+            if (i1, sinfo) not in make_src_links:
+                for i2, dinfo in dst_d:
+                    if i1==i2: update_dirs.append((i1, sinfo, dinfo))
+                
         #Select truncated based on if we have chached_status or not,
         #this way we don't have to pass another variable around.
         if cached_status: truncated= True
@@ -653,7 +668,7 @@ class FileSync(object):
                 
     def _copy_dirs(self, src, dst, path, src_i, dst_i, dirs, truncated= False, depth= 0, cached_status= None,verbose=True):
         status= cached_status
-        for file, info in dirs:
+        for file in dirs:
             if verbose: print "\t"*depth+"Object: "+file
             l_cached_status= None
             if not cached_status:
@@ -672,16 +687,16 @@ class FileSync(object):
                 
     def _update_files(self, src, dst, path, src_i, dst_i, files, truncated= False, depth= 0, cached_status= None,verbose=True):
         status= cached_status
-        for file in files:
+        for file, sinfo, dinfo in files:
             if verbose: print "\t"*depth+"Object: "+file
             if not cached_status or not self.cache_file_status:
                 (truncated, status)= self.config.GetPathStatus(path+[file], True)
             if status==PathStatus.include:
                 src_index= None
                 dst_index= None
-                src_mtime= src.getinfo(file)["modified_time"]
+                src_mtime= sinfo["modified_time"]
                 src_filesize= src.getsize(file)
-                dst_mtime= dst.getinfo(file)["modified_time"]
+                dst_mtime= dinfo["modified_time"]
                 dst_filesize= dst.getsize(file)
                 
                 if verbose: print "\t"*depth+"Synching file"
@@ -767,7 +782,23 @@ class FileSync(object):
                 new_dst= dst.makeopendir(file)
                 self._synch_walk(new_src, new_dst, path[:]+[file], src_i.GetPathPart([src_i.name,file], True), dst_i.GetPathPart([dst_i.name,file], True), depth+1, cached_status)
                 if verbose: print "\t"*depth+"<-dir_leave"
-            if status==PathStatus.stop:
+            elif status==PathStatus.stop:
                 if verbose: print "\t"*depth+"Removing dir"
                 src.removedir(file, force=True) 
                 dst.removedir(file, force=True)
+                
+    def _make_links(self, src, dst, path, src_i, dst_i, links, truncated= False,depth= 0, cached_status= None,verbose=True):
+        status= cached_status
+        for link in links:
+            if verbose: print "\t"*depth+"Object: "+file
+            if not cached_status or not self.cache_file_status:
+                (truncated, status)= self.config.GetPathStatus(path+[file], True)
+            if truncated:
+                cached_status= status
+            if status==PathStatus.include:
+                lnk= src.readlink(link)
+                if verbose: print "\t"*depth+"Creating link to"+lnk
+                dst.symlink(lnk, link)
+            elif status==PathStatus.ignore or status==PathStatus.stop:
+                if verbose: print "\t"*depth+"Removing link"
+                src.remove(link) 
