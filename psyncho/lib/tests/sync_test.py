@@ -1,50 +1,75 @@
 import unittest
 import pat  # touch pat.py in the cwd and try to import the empty file under Linux
-import string 
 
-from command import PsynchoCommand
-from psyncho import *
 from fs.opener import fsopendir
 from copy import deepcopy
+
+from extra import Enumerate, is_file, is_lnk, is_dir
+from command import PsynchoCommand
+from psyncho import *
+
+ObjectType= Enumerate("link dir file")
 
 class TestSynch(unittest.TestCase): 
     @classmethod
     def setUpClass(cls):
         cls.cmd= PsynchoCommand()
         
-    def OpenDirOrFile(self, f, root, dir):
-            if dir.split("/")[-1:][0].count(".")>0:
-                f.makeopendir(root+"/"+"/".join(dir.split("/")[:-1]), recursive=True)
-                f.createfile(root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
-            else:
-                f.makeopendir(root+"/"+dir, recursive=True)
-                
-    def RemoveDirOrFile(self, f, root, dir):
-            if dir.split("/")[-1:][0].count(".")>0:
-                f.remove(root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
-                f.removedir(root+"/"+"/".join(dir.split("/")[:-1]), recursive=True, force=True)
-            else:
-                f.removedir(root+"/"+dir, recursive=True, force=True)         
+    def OpenDir(self, f, root, dir):
+        f.makeopendir(root+"/"+dir, recursive=True)
         
-    def Makedirs(self, path, root, dirs):
+    def CreateFile(self, f, root, dir):
+        f.makeopendir(root+"/"+"/".join(dir.split("/")[:-1]), recursive=True)
+        f.createfile(root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
+        
+    def CreateLink(self, f, root, dir, linkto):
+        f.makeopendir(root+"/"+"/".join(dir.split("/")[:-1]), recursive=True)
+        f.symlink(linkto, root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
+        
+    def RemoveDir(self, f, root, dir):
+        f.removedir(root+"/"+dir, recursive=True, force=True)
+        
+    def RemoveFile(self, f, root, dir):
+        f.remove(root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
+        f.removedir(root+"/"+"/".join(dir.split("/")[:-1]), recursive=True, force=True)
+        
+    def RemoveLink(self, f, root, dir):
+        f.remove(root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
+        f.removedir(root+"/"+"/".join(dir.split("/")[:-1]), recursive=True, force=True)    
+        
+    def MakeObjects(self, path, root, objects):
         f= fsopendir(path)
-        for dir in dirs:
-            self.OpenDirOrFile(f, root, dir)
-    def Deldirs(self, path, root, dirs):
+        for type, object, attr in objects:
+            if type==ObjectType.dir:
+                self.OpenDir(f, root, object)
+            elif type==ObjectType.file:
+                self.CreateFile(f, root, object)
+            elif type==ObjectType.link:
+                self.CreateLink(f, root, object, attr)
+                
+    def DelObjects(self, path, root, objects):
         f= fsopendir(path)
-        for dir in dirs:
-            try:
-                self.RemoveDirOrFile(f, root, dir)
-            except:
-                continue
+        for type, object, attr in objects:
+            if type==ObjectType.dir:
+                self.RemoveDir(f, root, object)
+            elif type==ObjectType.file:
+                self.RemoveFile(f, root, object)
+            elif type==ObjectType.link:
+                self.RemoveLink(f, root, object, attr)
             
-    def Checkdirs(self, path, root, dirs, correct_dirs):
+    def CheckObjects(self, path, root, objects, correct_objects):
         f= fsopendir(path)
-        for dir in dirs:
-            if f.isdir(root+"/"+dir):
-                self.assertTrue(dir in correct_dirs)
-            elif f.isfile(root+"/"+dir):
-                self.assertTrue(dir in correct_dirs)
+        for type, object, attr in objects:
+            try: i= f.getinfo(root+"/"+object)
+            except:
+                self.assertTrue(object not in correct_objects)
+                continue
+            if is_dir(i) and type==ObjectType.dir:
+                self.assertTrue(object in correct_objects)
+            elif is_file(i) and type==ObjectType.file:
+                self.assertTrue(object in correct_objects)
+            elif is_lnk(i) and type==ObjectType.link:
+                self.assertTrue(object in correct_objects)
             
     def CurrentDir(self):
         PAT=str(pat).split()[3][1:-9] # PATH extracted..
@@ -84,9 +109,14 @@ class TestSynch(unittest.TestCase):
         self.cmd.DelConfig("test")
         
     def test_Synch(self):
-        dirs1=["a/m/file.txt", "a/file.txt","b/c/file.txt","c"]
-        self.Makedirs(self.CurrentDir()+"/testdirs","test1",dirs1)
-        self.Makedirs(self.CurrentDir()+"/testdirs","test2",[""])
+        dirs1=[(ObjectType.file, "a/m/file.txt", None), \
+               (ObjectType.file, "a/file.txt", None), \
+               (ObjectType.file, "b/c/file.txt", None), \
+               (ObjectType.dir, "c", None)]
+        dirs2=[(ObjectType.dir, "", None)]
+        
+        self.MakeObjects(self.CurrentDir()+"/testdirs","test1",dirs1)
+        self.MakeObjects(self.CurrentDir()+"/testdirs","test2",dirs2)
         self.cmd.NewConfig("test", "include", None)
         self.cmd.SelectCurrentConfig("test")
         self.cmd.SetPathStatus("root/a", "ignore")
@@ -99,25 +129,24 @@ class TestSynch(unittest.TestCase):
         self.cmd.SetPathStatus("root/b/c/file.txt", "include")
         
         self.cmd.NewConfig("test2", "include", "test->test2")
+        print self.cmd.GenConfigTree(True)
         
         self.cmd.NewSynch("synchtest1","./testdirs/test1", "./testdirs/test2", "test2")
-        self.cmd.Synch("synchtest1")
-        
-        print self.cmd.GenConfigTree(True)     
+        self.cmd.Synch("synchtest1") 
         
         correct_dirs=["a/m/file.txt","b/c", "a/file.txt", "b/c/file.txt"]
-        self.Checkdirs(self.CurrentDir()+"/testdirs","test1",dirs1,correct_dirs)
-        self.Checkdirs(self.CurrentDir()+"/testdirs","test2",dirs1,correct_dirs)
+        self.CheckObjects(self.CurrentDir()+"/testdirs","test1",dirs1,correct_dirs)
+        self.CheckObjects(self.CurrentDir()+"/testdirs","test2",dirs1,correct_dirs)
         
-        self.Deldirs(self.CurrentDir()+"/testdirs","test1",[""])
-        self.Deldirs(self.CurrentDir()+"/testdirs","test2",[""])
+        self.DelObjects(self.CurrentDir()+"/testdirs","test1",[(ObjectType.dir, "", None)])
+        self.DelObjects(self.CurrentDir()+"/testdirs","test2",[(ObjectType.dir, "", None)])
         
         self.cmd.DelConfig("test")
         self.cmd.DelConfig("test2")
         
     def test_regex(self):
         conf1= self.cmd.NewConfig("test", "include", None)
-        #First rule ovverides second
+        #First rule overrides second
         conf1.paths.SetPathStatus(["root","jaka","{hudoklin|micka}","{cba|cde}"], PathStatus.stop)
         conf1.paths.SetPathStatus(["root","jaka","micka","cde"], PathStatus.include)
         result= conf1.paths.GetPathStatus(["root","jaka","hudoklin","cba"])
