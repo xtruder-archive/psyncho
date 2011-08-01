@@ -552,7 +552,9 @@ class FileSync(object):
         else:
             return
         
-        self._synch_walk(src, dst, base_path, self.file_sync_config.src_index.GetPathPart(base_path, True), self.file_sync_config.dst_index.GetPathPart(base_path, True), self.file_sync_config.config_layer)
+        #Make config as global var
+        self.config= self.file_sync_config.config_layer
+        self._synch_walk(src, dst, base_path, self.file_sync_config.src_index.GetPathPart(base_path, True), self.file_sync_config.dst_index.GetPathPart(base_path, True) )
         
     def dt2ut(self, date):
         return int(mktime(date.timetuple()))
@@ -560,7 +562,8 @@ class FileSync(object):
     def ut2dt(self, date):
         return datetime.fromtimestamp(date)
         
-    def _synch_walk(self, src, dst, path, src_i, dst_i, config, depth= 0, cached_status= None,verbose=True):
+    def _synch_walk(self, src, dst, path, src_i, dst_i, depth= 0, cached_status= None, verbose=True):
+        #Get list of files in dirs        
         src_files= src.listdir()
         dst_files= dst.listdir()
         
@@ -576,6 +579,7 @@ class FileSync(object):
             if stat.S_ISREG( src_info[id]["st_mode"] ): src_f.append( (i,src_info[id]) )
             elif stat.S_ISDIR( src_info[id]["st_mode"] ): src_d.append( (i,src_info[id]) )
             elif stat.S_ISLNK( src_info[id]["st_mode"] ): src_l.append( (i,src_info[id]) )
+            else: pass #If file/dir is something we don't know we just pass
             
         dst_f= []
         dst_d= []
@@ -584,12 +588,14 @@ class FileSync(object):
             if stat.S_ISREG( dst_info[id]["st_mode"] ): dst_f.append( (i,dst_info[id]) )
             elif stat.S_ISDIR( dst_info[id]["st_mode"] ): dst_d.append( (i,dst_info[id]) )
             elif stat.S_ISLNK( dst_info[id]["st_mode"] ): dst_l.append( (i,dst_info[id]) )
+            else: pass #If file/dir is something we don't know we just pass
 
         #This operations are considered fast
         copy_src_files = [(i,info) for i, info in src_f if i not in dst_files or (i, info) in dst_d]
         copy_src_dirs = [(i,info) for i, info in src_d if i not in dst_files or (i, info) in dst_f]
         copy_dst_files = [(i,info) for i, info in dst_f if i not in src_files or (i, info) in src_d]
         copy_dst_dirs = [(i,info) for i, info in dst_d if i not in src_files or (i, info) in src_f]
+        
         #Update files are in src and dst the same.
         #Files that are not in those files we are about to copy.
         update_files = [i for i, info in src_f if (i, info) not in copy_src_files]
@@ -597,14 +603,34 @@ class FileSync(object):
         #Dirs that are not in those dirs we are about to copy.
         update_dirs = [i for i, info in src_d if (i, info) not in copy_src_dirs]
         
-        status= cached_status
-        if cached_status:
-            truncated= True
+        #Select truncated based on if we have chached_status or not,
+        #this way we don't have to pass another variable around.
+        if cached_status: truncated= True
+        else: truncated= False
         
-        for file, info in copy_src_files:
+        #Do all the hard work.
+        #src->dst
+        self._copy_files(src, dst, path, src_i, dst_i, copy_src_files, truncated, depth, cached_status, verbose)
+        self._copy_dirs(src, dst, path, src_i, dst_i, copy_src_dirs, truncated, depth, cached_status, verbose)
+        #dst->src
+        self._copy_files(dst, src, path, dst_i, src_i, copy_dst_files, truncated, depth, cached_status, verbose)
+        self._copy_dirs(dst, src, path, dst_i, src_i, copy_dst_dirs, truncated, depth, cached_status, verbose)
+        #dst<->src
+        self._update_files(src, dst, path, src_i, dst_i, update_files, truncated, depth, cached_status, verbose)
+        self._update_dirs(src, dst, path, src_i, dst_i, update_dirs, truncated, depth, cached_status, verbose)
+        
+        #Save file indexes to database
+        if datetime.now()-self.start_time>timedelta(seconds=100):
+            print "Commit CommitCommitCommitCommitCommitCommitCommitCommitCommitCommitCommit"
+            self.db.commit()
+            self.start_time= datetime.now()
+            
+    def _copy_files(self, src, dst, path, src_i, dst_i, files, truncated= False, depth= 0, cached_status= None,verbose=True):
+        status= cached_status
+        for file, info in files:
             if verbose: print "\t"*depth+"Object: "+file
             if not cached_status or not self.cache_file_status:
-                status= config.GetPathStatus(path+[file])
+                status= self.config.GetPathStatus(path+[file])
             if status==PathStatus.include:
                 src_index= None
                 dst_index= None
@@ -623,72 +649,33 @@ class FileSync(object):
                     dst_index.CreationTime= self.dt2ut(dst.getinfo(file)["modified_time"])   
             if status==PathStatus.stop:
                 if verbose: print "\t"*depth+"Removing file"
-                src.remove(file)  
+                src.remove(file)    
                 
-        for file, info in copy_src_dirs:
+    def _copy_dirs(self, src, dst, path, src_i, dst_i, dirs, truncated= False, depth= 0, cached_status= None,verbose=True):
+        status= cached_status
+        for file, info in dirs:
             if verbose: print "\t"*depth+"Object: "+file
             l_cached_status= None
             if not cached_status:
-                (truncated, status)= config.GetPathStatus(path+[file], True)
+                (truncated, status)= self.config.GetPathStatus(path+[file], True)
             if truncated:
                 l_cached_status= status
             if status==PathStatus.include or (status==PathStatus.ignore and not truncated):
                 if verbose: print "\t"*depth+"dir_enter->"
                 new_src= src.makeopendir(file)
                 new_dst= dst.makeopendir(file)
-                self._synch_walk(new_src, new_dst, path[:]+[file], src_i.GetPathPart([src_i.name,file], True), dst_i.GetPathPart([dst_i.name,file], True), config, depth+1, l_cached_status)
+                self._synch_walk(new_src, new_dst, path[:]+[file], src_i.GetPathPart([src_i.name,file], True), dst_i.GetPathPart([dst_i.name,file], True), depth+1, l_cached_status)
                 if verbose: print "\t"*depth+"<-dir_leave"
             if status==PathStatus.stop:
                 if verbose: print "\t"*depth+"Removing dir"
                 src.removedir(file, force=True)
-
-        for file, info in copy_dst_files:
+                
+    def _update_files(self, src, dst, path, src_i, dst_i, files, truncated= False, depth= 0, cached_status= None,verbose=True):
+        status= cached_status
+        for file in files:
             if verbose: print "\t"*depth+"Object: "+file
             if not cached_status or not self.cache_file_status:
-                status= config.GetPathStatus(path+[file])
-            if status==PathStatus.include:
-                src_index= None
-                dst_index= None
-                dst_mtime= info["modified_time"]
-                dst_filesize= info["size"]
-                
-                try:
-                    copyfile(dst, file, src, file)
-                except:
-                    continue
-                if dst_filesize>1000:
-                    print "Sync synch synch..............................."
-                    src_index= src_i.GetPathPart([src_i.name,file], True)
-                    dst_index= dst_i.GetPathPart([dst_i.name,file], True)
-                    dst_index.CreationTime= self.dt2ut(dst_mtime)
-                    src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])   
-            if status==PathStatus.stop:
-                if verbose: print "\t"*depth+"Removing file"
-                dst.remove(file)  
-                
-        for file, info in copy_dst_dirs:
-            if verbose: print "\t"*depth+"Object: "+file
-            l_cached_status= None
-            if not cached_status:
-                (truncated, status)= config.GetPathStatus(path+[file], True)
-            if truncated:
-                l_cached_status= status
-            if status==PathStatus.include or (status==PathStatus.ignore and not truncated):
-                if verbose: print "\t"*depth+"dir_enter->"
-                new_src= src.makeopendir(file)
-                new_dst= dst.makeopendir(file)
-                self._synch_walk(new_src, new_dst, path[:]+[file], src_i.GetPathPart([src_i.name,file], True), dst_i.GetPathPart([dst_i.name,file], True), config, depth+1, l_cached_status)
-                if verbose: print "\t"*depth+"<-dir_leave"
-            if status==PathStatus.stop:
-                if verbose: print "\t"*depth+"Removing dir"
-                dst.removedir(file, force=True)
-                    
-        #When we update, we must make shure that we walk also dirs, because
-        #sometimes, rules are souch that we must delete some dirs.
-        for file in update_files:
-            if verbose: print "\t"*depth+"Object: "+file
-            if not cached_status or not self.cache_file_status:
-                (truncated, status)= config.GetPathStatus(path+[file], True)
+                (truncated, status)= self.config.GetPathStatus(path+[file], True)
             if status==PathStatus.include:
                 src_index= None
                 dst_index= None
@@ -765,25 +752,22 @@ class FileSync(object):
                                 continue
                             dst_index.CreationTime= self.dt2ut(dst_mtime)
                             src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])
-                                
-        for file in update_dirs:
+                            
+    def _update_dirs(self, src, dst, path, src_i, dst_i, dirs, truncated= False,depth= 0, cached_status= None,verbose=True):
+        status= cached_status
+        for file in dirs:
             if verbose: print "\t"*depth+"Object: "+file
             if not cached_status or not self.cache_file_status:
-                (truncated, status)= config.GetPathStatus(path+[file], True)
+                (truncated, status)= self.config.GetPathStatus(path+[file], True)
             if truncated:
                 cached_status= status
             if status==PathStatus.include or (status==PathStatus.ignore and not truncated):
                 if verbose: print "\t"*depth+"dir_enter->"
                 new_src= src.makeopendir(file)
                 new_dst= dst.makeopendir(file)
-                self._synch_walk(new_src, new_dst, path[:]+[file], src_i.GetPathPart([src_i.name,file], True), dst_i.GetPathPart([dst_i.name,file], True), config, depth+1, cached_status)
+                self._synch_walk(new_src, new_dst, path[:]+[file], src_i.GetPathPart([src_i.name,file], True), dst_i.GetPathPart([dst_i.name,file], True), depth+1, cached_status)
                 if verbose: print "\t"*depth+"<-dir_leave"
             if status==PathStatus.stop:
                 if verbose: print "\t"*depth+"Removing dir"
                 src.removedir(file, force=True) 
                 dst.removedir(file, force=True)
-        
-        if datetime.now()-self.start_time>timedelta(seconds=100):
-            print "Commit CommitCommitCommitCommitCommitCommitCommitCommitCommitCommitCommit"
-            self.db.commit()
-            self.start_time= datetime.now()
