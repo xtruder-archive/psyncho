@@ -27,7 +27,8 @@ class TestSynch(unittest.TestCase):
         f.symlink(linkto, root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
         
     def RemoveDir(self, f, root, dir):
-        f.removedir(root+"/"+dir, recursive=True, force=True)
+        try: f.removedir(root+"/"+dir, recursive=True, force=True)
+        except: pass
         
     def RemoveFile(self, f, root, dir):
         f.remove(root+"/"+"/".join(dir.split("/")[:-1])+"/"+dir.split("/")[-1:][0])
@@ -109,11 +110,15 @@ class TestSynch(unittest.TestCase):
         self.cmd.DelConfig("test")
         
     def test_Synch(self):
-        dirs1=[(ObjectType.file, "a/m/file.txt", None), \
-               (ObjectType.file, "a/file.txt", None), \
-               (ObjectType.file, "b/c/file.txt", None), \
-               (ObjectType.dir, "c", None)]
-        dirs2=[(ObjectType.dir, "", None)]
+        dirs1=[(ObjectType.file, "a/m/file.txt", None),
+               (ObjectType.dir, "a/m/d", None),
+               (ObjectType.file, "a/file.txt", None),
+               (ObjectType.file, "b/c/file.txt", None),
+               (ObjectType.dir, "c", None),
+               (ObjectType.link,"/b/a", "../a")]
+        dirs2=[(ObjectType.dir, "", None),
+               (ObjectType.dir, "/a", None),
+               (ObjectType.link,"/b/a", "../a")]
         
         self.MakeObjects(self.CurrentDir()+"/testdirs","test1",dirs1)
         self.MakeObjects(self.CurrentDir()+"/testdirs","test2",dirs2)
@@ -134,7 +139,7 @@ class TestSynch(unittest.TestCase):
         self.cmd.NewSynch("synchtest1","./testdirs/test1", "./testdirs/test2", "test2")
         self.cmd.Synch("synchtest1") 
         
-        correct_dirs=["a/m/file.txt","b/c", "a/file.txt", "b/c/file.txt"]
+        correct_dirs=["a/m/file.txt","b/c", "a/file.txt", "b/c/file.txt", "/b/a"]
         self.CheckObjects(self.CurrentDir()+"/testdirs","test1",dirs1,correct_dirs)
         self.CheckObjects(self.CurrentDir()+"/testdirs","test2",dirs1,correct_dirs)
         

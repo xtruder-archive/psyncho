@@ -41,11 +41,25 @@ def main():
     parser.add_option("-a", "--add",
                       help="Initializes sync in current folder, args: name, path, status", action="store_true", dest="add")
     
+    curr_path= os.path.abspath(os.getcwd())
+    while True:
+        try:
+            files= os.listdir(curr_path)
+        except:
+            curr_path= []
+            break
+        if "psyncho_config.db" in files:
+            break
+        curr_path= os.path.abspath(os.path.join(curr_path, '../'))
+    
     (options, args) = parser.parse_args()
     ps= None
     if options.config_file:
+        print "Config file "+options.config_file
         ps= PsynchoCommand(options.config_file)
-	print "Config file "+options.config_file
+    elif curr_path:
+        print "Config file "+curr_path+"/psyncho_config.db"
+        ps= PsynchoCommand(curr_path+"/psyncho_config.db")
     else:
         ps= PsynchoCommand()
         
@@ -112,21 +126,21 @@ def main():
         
         curr_path= os.path.abspath(os.getcwd())
         sub_path= curr_path.split("/")[-1:]
-        old_path=[""]
         while True:
+            curr_path= os.path.abspath(os.path.join(curr_path, '../'))
             files= os.listdir(curr_path)
             if ".psyncho" in files:
                 break
-            curr_path= os.path.abspath(os.path.join(curr_path, '../'))
-            old_path= sub_path
             sub_path+= curr_path.split("/")[-1:]
             
+        if path[-1:]=="/":
+            path= path[:-1]
+            
         sub_path.reverse()
-        print "/".join(old_path)+path
-        ps.SetPathStatus("root/"+"/".join(old_path)+path, status, name)
+        print "root/"+"/".join(sub_path)+"/"+path
+        ps.SetPathStatus("root/"+"/".join(sub_path)+"/"+path, status, name)
         
     ps.Save()
         
 if __name__ == "__main__":
     main()
-        

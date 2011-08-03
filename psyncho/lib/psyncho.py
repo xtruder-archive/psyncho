@@ -12,7 +12,7 @@ from datetime import timedelta
 from datetime import datetime
 from time import mktime
 
-from extra import Enumerate
+from extra import Enumerate, is_file, is_lnk, is_dir
 
 PathStatus= Enumerate("undef include ignore stop")
 
@@ -64,7 +64,7 @@ class PathPart(pod.Object):
             if(tpathPart):
                 return True
             
-        return True
+        return False
         
     def GetLastPart(self, path, report_truncated= False):
         if(path==[]):
@@ -589,26 +589,24 @@ class FileSync(object):
         #This operations are considered slow,
         #so we want to do them only once.
         src_info= [src.getinfo(i) for i in src_files]
-        dst_info= [src.getinfo(i) for i in src_files]
+        dst_info= [dst.getinfo(i) for i in dst_files]
         
         src_f= []
         src_d= []
         src_l=[]
         for id, i in enumerate(src_files):
-            if stat.S_ISREG( src_info[id]["st_mode"] ): src_f.append( (i,src_info[id]) )
-            elif stat.S_ISDIR( src_info[id]["st_mode"] ): src_d.append( (i,src_info[id]) )
-            elif stat.S_ISLNK( src_info[id]["st_mode"] ): 
-                src_l.append( (i,src_info[id]) )
+            if is_file( src_info[id] ): src_f.append( (i,src_info[id]) )
+            elif is_dir( src_info[id] ): src_d.append( (i,src_info[id]) )
+            elif is_lnk( src_info[id] ): src_l.append( (i,src_info[id]) )
             else: pass #If file/dir is something we don't know we just pass.
             
         dst_f= []
         dst_d= []
         dst_l=[]
         for id, i in enumerate(dst_files):
-            if stat.S_ISREG( dst_info[id]["st_mode"] ): dst_f.append( (i,dst_info[id]) )
-            elif stat.S_ISDIR( dst_info[id]["st_mode"] ): dst_d.append( (i,dst_info[id]) )
-            elif stat.S_ISLNK( dst_info[id]["st_mode"] ): 
-                dst_l.append( (i,dst_info[id]) )
+            if is_file( dst_info[id] ): dst_f.append( (i,dst_info[id]) )
+            elif is_dir( dst_info[id] ): dst_d.append( (i,dst_info[id]) )
+            elif is_lnk( dst_info[id] ): dst_l.append( (i,dst_info[id]) )
             else: pass #If file/dir is something we don't know we just pass.
 
         #This operations are considered fast
@@ -829,10 +827,10 @@ class FileSync(object):
     def _make_links(self, src, dst, path, src_i, dst_i, links, truncated= False,depth= 0, cached_status= None,verbose=True):
         if verbose and links: print "\t"*depth+"Make links"
         status= cached_status
-        for link in links:
-            if verbose: print "\t"*depth+"Object: "+file
+        for link, info in links:
+            if verbose: print "\t"*depth+"Object: "+link
             if not cached_status or not self.cache_file_status:
-                (truncated, status)= self.config.GetPathStatus(path+[file], True)
+                (truncated, status)= self.config.GetPathStatus(path+[link], True)
             if truncated:
                 cached_status= status
             if status==PathStatus.include:
@@ -845,6 +843,7 @@ class FileSync(object):
                 
     def _update_links(self, src, dst, path, src_i, dst_i, links, truncated= False,depth= 0, cached_status= None,verbose=True):
         if verbose and links: print "\t"*depth+"Update links"
+        status= cached_status
         for file, sinfo, dinfo in links:
             if verbose: print "\t"*depth+"Object: "+file
             if not cached_status or not self.cache_file_status:
@@ -855,7 +854,9 @@ class FileSync(object):
                 #Links point to same location, do nothing.
                 slnk= src.readlink(file)
                 dlnk= dst.readlink(file)
-                if slnk==dlnk: continue
+                if slnk==dlnk:
+                    if verbose: print "\t"*depth+"Links are in synch" 
+                    continue
                 
                 #In case links are different use
                 src_index= None
@@ -863,7 +864,7 @@ class FileSync(object):
                 src_mtime= sinfo["modified_time"]
                 dst_mtime= dinfo["modified_time"]
                 
-                if verbose: print "\t"*depth+"Synching file"
+                if verbose: print "\t"*depth+"Synching links"
                 src_index= src_i.GetPathPart([src_i.name,file], True)
                 dst_index= dst_i.GetPathPart([dst_i.name,file], True)
                 #If we get error when getting indexes, just action based on scr or dst mtime
@@ -899,10 +900,13 @@ class FileSync(object):
                 else:    
                     #both files are unchanged
                     if self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)) and self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
-                        if verbose: print "\t"*depth+"Both files are synched"
+                        if verbose: print "\t"*depth+"Links were created at the same time, use one of them."
+                        #We must copy one of the links.
+                        dst.remove(file)
+                        dst.symlink(slnk, file)
                     #src has changed and dst has not
                     elif self.ut2dt(src_index.CreationTime)<src_mtime and self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
-                        if verbose: print "\t"*depth+"Src file has changed, but dst not"
+                        if verbose: print "\t"*depth+"Src link has changed, but dst not"
                         try:
                             dst.remove(file)
                             dst.symlink(slnk, file)
@@ -910,7 +914,7 @@ class FileSync(object):
                         dst_index.CreationTime= self.dt2ut(dst.getinfo(file)["modified_time"])
                     #dst has changed and src has not
                     elif self.ut2dt(dst_index.CreationTime)<dst_mtime and self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)):
-                        if verbose: print "\t"*depth+"Dst file has changed, but src not"
+                        if verbose: print "\t"*depth+"Dst link has changed, but src not"
                         try:
                             src.remove(file)
                             src.symlink(dlnk, file)
@@ -918,7 +922,7 @@ class FileSync(object):
                         src_index.CreationTime= self.dt2ut(src.getinfo(file)["modified_time"])
                     #both files has changed, update indexes 
                     elif not self.SmallTime(src_mtime, self.ut2dt(src_index.CreationTime)) and not self.SmallTime(dst_mtime, self.ut2dt(dst_index.CreationTime)):
-                        if verbose: print "\t"*depth+"Both files has changed."
+                        if verbose: print "\t"*depth+"Both links has changed."
                         if src_mtime>dst_mtime:
                             try:
                                 dst.remove(file)
