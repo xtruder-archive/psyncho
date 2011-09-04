@@ -12,7 +12,7 @@ from datetime import timedelta
 from datetime import datetime
 from time import mktime
 
-from extra import Enumerate, is_file, is_lnk, is_dir
+from extra import Enumerate, is_file, is_lnk, is_dir, get_fmod
 
 PathStatus= Enumerate("undef include ignore stop")
 
@@ -612,7 +612,7 @@ class FileSync(object):
         #This operations are considered fast
         #Src
         copy_src_files = [(i,info) for i, info in src_f if i not in dst_files or (i, info) in dst_d]
-        copy_src_dirs = [i for i, info in src_d if i not in dst_files or (i, info) in dst_f]
+        copy_src_dirs = [(i, info) for i, info in src_d if i not in dst_files or (i, info) in dst_f]
         make_src_links = [(i,info) for i, info in src_l if i not in dst_files]
         #Dst
         copy_dst_files = [(i,info) for i, info in dst_f if i not in src_files or (i, info) in src_d]
@@ -630,7 +630,7 @@ class FileSync(object):
         #Dirs that are not in those dirs we are about to copy.
         update_dirs=[]
         for i1, sinfo in src_d:
-            if i1 not in copy_src_dirs: update_dirs.append(i1)
+            if (i1, dinfo) not in copy_src_dirs: update_dirs.append((i1,sinfo,dinfo))
         update_links=[]
         for i1, sinfo in src_l:
             if (i1, sinfo) not in make_src_links:
@@ -655,8 +655,10 @@ class FileSync(object):
         self._update_files(src, dst, path, src_i, dst_i, update_files, truncated, depth, cached_status, verbose)
         self._update_dirs(src, dst, path, src_i, dst_i, update_dirs, truncated, depth, cached_status, verbose)
         self._update_links(src, dst, path, src_i, dst_i, update_links, truncated, depth, cached_status, verbose)
+        #We have to check if permissions have been changed on files links and dirs.
+        self._update_permissions(src, dst, update_files+update_dirs+update_links, truncated, depth, cached_status, verbose)
         
-        #Save file indexes to database
+        #Save file indexes to database from time to time.
         if datetime.now()-self.start_time>timedelta(seconds=100):
             print "Commit CommitCommitCommitCommitCommitCommitCommitCommitCommitCommitCommit"
             self.db.commit()
@@ -677,6 +679,9 @@ class FileSync(object):
                 
                 try:
                     copyfile(src, file, dst, file)
+                    #Change mod of newly created file
+                    #to mod of a source file
+                    dst.chmod(file, get_fmod(info))
                 except:
                     continue
                 if src_filesize>=0:
@@ -692,7 +697,7 @@ class FileSync(object):
     def _copy_dirs(self, src, dst, path, src_i, dst_i, dirs, truncated= False, depth= 0, cached_status= None,verbose=True):
         if verbose and dirs: print "\t"*depth+"Copy dirs"
         status= cached_status
-        for file in dirs:
+        for file, sinfo, dinfo in dirs:
             if verbose: print "\t"*depth+"Object: "+file
             l_cached_status= None
             if not cached_status:
@@ -703,6 +708,9 @@ class FileSync(object):
                 if verbose: print "\t"*depth+"dir_enter->"
                 new_src= src.makeopendir(file)
                 new_dst= dst.makeopendir(file)
+                #Change mod of newly created file
+                #to mod of a source file
+                dst.chmod(file, get_fmod(sinfo))
                 self._synch_walk(new_src, new_dst, path[:]+[file], src_i.GetPathPart([src_i.name,file], True), dst_i.GetPathPart([dst_i.name,file], True), depth+1, l_cached_status)
                 if verbose: print "\t"*depth+"<-dir_leave"
             elif status==PathStatus.stop:
@@ -837,9 +845,25 @@ class FileSync(object):
                 lnk= src.readlink(link)
                 if verbose: print "\t"*depth+"Creating link to"+lnk
                 dst.symlink(lnk, link)
+                #Change mod of newly created link
+                #to mod of a source link
+                dst.chmod(link, get_fmod(info))
             elif status==PathStatus.stop:
                 if verbose: print "\t"*depth+"Removing link"
                 src.remove(link)
+                
+    def _update_permissions(self, src, dst, files, truncated= False,depth= 0, cached_status= None,verbose=True):):
+        if verbose and links: print "\t"*depth+"Update permissions"
+        
+        #Here we can't act based on modification time,
+        #so we have to decide based on options.
+        for file, sinfo, dinfo in files:
+            if verbose: print "\t"*depth+"Object: "+file
+            #We update in case if st_modes are different
+            #this should be sufficient detection.
+            if get_fmod(sinfo["st_mode"])!=get_fmod(dinfo["st_mode"]):
+                dst.chmod(file, get_fmod(sinfo))
+                #src.chmod(file, dmod)
                 
     def _update_links(self, src, dst, path, src_i, dst_i, links, truncated= False,depth= 0, cached_status= None,verbose=True):
         if verbose and links: print "\t"*depth+"Update links"

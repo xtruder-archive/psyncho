@@ -3,6 +3,7 @@
 	<name>psyncho</name>
 	<comment></comment>
 	<projects>
+		<project>pyfilesystem</project>
 	</projects>
 	<buildSpec>
 		<buildCommand>

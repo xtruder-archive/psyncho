@@ -13,3 +13,6 @@ def is_dir(info):
 
 def is_lnk(info):
     return stat.S_ISLNK( info["st_mode"] )
+
+def get_fmod(info):
+    return info["st_mode"] & 0x00000FFF
