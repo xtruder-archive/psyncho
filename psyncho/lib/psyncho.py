@@ -17,25 +17,32 @@ from extra import Enumerate, is_file, is_lnk, is_dir, get_fmod
 PathStatus= Enumerate("undef include ignore stop")
 
 class PathPart(pod.Object):
-    def __init__(self, name, parent= None, lPathStatus=PathStatus.undef, depth= 0):
+    def __init__(self, name, parent= None, pathStatus= PathStatus.undef, depth= 0):
         pod.Object.__init__(self)
         
-        self.name= name
-        self.PathStatus= lPathStatus
+        self.name= name # Value of the path
+        self.PathStatus= pathStatus
         
         self.children= []
         self.parent= parent
         if parent!=None:
             self.parent.children.append(self)
+
+        # We must store depth to help while getting config layer with deepest path.
         self.depth= depth
+
+        self.pathConfig=[] # Config as key->value store.
                 
-    def CreatePath(self, path, lPathStatus= PathStatus.undef):
+    def CreatePath(self, path, pathStatus= PathStatus.undef):
+        # If we are at the end of creation return self.
         if(path==[]):
             return self
         
-        tpathPart=PathPart(path[0], self, lPathStatus, self.depth+1)
+        # Here the creation gets done
+        pathPart= PathPart(path[0], self, pathStatus, self.depth+1)
         
-        return tpathPart.CreatePath(path[1:])   
+        # Recursively call for full path creation
+        return pathPart.CreatePath(path[1:])   
         
     def GetPathPart(self, path, new=False):
         if(path==[]):
@@ -50,9 +57,9 @@ class PathPart(pod.Object):
             
         if(new == True):
             return self.CreatePath(path[1:])
-        
+
         return self
-    
+
     def PathExists(self, path):
         if(path==[]):
             return self.parent
@@ -82,6 +89,7 @@ class PathPart(pod.Object):
                     return (False,None)
                 else:
                     return None
+        # Regex of type2 matches whole string path from here on.
         elif match2:
             regex= match2.group('regex')
             stringpath= '/'.join(path)
@@ -98,7 +106,7 @@ class PathPart(pod.Object):
                 return (False,None)
             else:
                 return None
-            
+        
         for child in self.children:
             if report_truncated:
                 (truncated, tpathPart)= child.GetLastPart(path[1:], report_truncated)
@@ -109,8 +117,9 @@ class PathPart(pod.Object):
                     return (truncated,tpathPart)
                 else:
                     return tpathPart 
-                
-        #That's the key and only point where we report truncated
+        
+        """That's the key and only point where we report truncated.
+        That's in a case when searched path is longer than configured one."""
         if report_truncated and len(path[1:])>0:
             return (True, self)
          
@@ -118,7 +127,7 @@ class PathPart(pod.Object):
             return (False,self)
         else:
             return self
-            
+        
     def DelPathPart(self, path):
         tpathPart= self.GetPathPart(path, False)
         if(tpathPart==None):
@@ -127,16 +136,28 @@ class PathPart(pod.Object):
         tpathPart.parent.children.remove(tpathPart)
         tpathPart.delete()
         
+    def SetPathConfig(self, path, key, value):
+        # PathPart must already exist to set config.
+        pathPart= self.GetPathPart(path, False)
+        if pathPart:
+            pathPart.pathConfig[key]= value
+
+    def GetPathConfig(self, path, key):
+        # PathPart must already exist to get config.
+        pathPart= self.GetPathPart(path, False)
+        if pathPart:
+            return pathPart.pathConfig[key]
+
     def SetPathStatus(self, path, lPathStatus):
-        path_part= self.GetPathPart(path, True)
-        path_part.PathStatus = lPathStatus
+        pathPart= self.GetPathPart(path, True) #This function should never return None
+        pathPart.PathStatus = lPathStatus
         
     def GetPathStatus(self, path):
         tpathPart= self.GetLastPart(path)
         
         if(tpathPart==None):
             return PathStatus.undef
-            
+        
         return tpathPart.PathStatus
     
     def __str__(self):
@@ -176,9 +197,9 @@ class PathPart(pod.Object):
             dup= PathPart(self.name, deepcopy(self.parent, memo), deepcopy(self.PathStatus, memo), deepcopy(self.depth, memo))
         else:
             dup= PathPart(self.name, None, deepcopy(self.PathStatus, memo), deepcopy(self.depth, memo))
-            
+        
         return dup
-            
+        
 class ConfigLayer(pod.Object):
     def __init__(self, name, FileAccess, lPathStatus, parent=None):
         pod.Object.__init__(self)
@@ -198,9 +219,9 @@ class ConfigLayer(pod.Object):
             if path.PathExists(lpath):
                 return True
             path= self.paths.parent
-            
-        return False
         
+        return False
+    
     def GetPathStatus(self, path, report_truncated= False, previous_truncated=None):
         depth= len(path)
         if report_truncated:
@@ -216,7 +237,7 @@ class ConfigLayer(pod.Object):
             return self.__GetPathStatus__(path, self, self.paths, depth, report_truncated, previous_truncated)
         else:
             return self.__GetPathStatus__(path, self, tpathPart, depth, report_truncated, previous_truncated)
-        
+    
     def __GetPathStatus__(self, path, parent, previousBest, depth, report_truncated= False, previous_truncated=None):
         if(parent.parent==None):
             if report_truncated:
@@ -229,33 +250,41 @@ class ConfigLayer(pod.Object):
         else:
             tpathPart= parent.parent.paths.GetLastPart(path)
         
-        'If we must stop at speciffic path then return status to stop'
+        # If we must stop at speciffic path then return
+        # status to stop regardless if parent paths have
+        # any other plans.
         if(tpathPart.PathStatus==PathStatus.stop):
             if report_truncated:
                 return (truncated, PathStatus.stop)
             else:
                 return PathStatus.stop
         
-        'if path status is not defined go to next parent'
+        # If path status is not defined go search to the next parent.
         if(tpathPart.PathStatus==PathStatus.undef):
             return self.__GetPathStatus__(path, parent.parent, previousBest, depth, report_truncated, previous_truncated)
-        
+
+        # Get the difference betwene path length and previousBest depth and current one.
         sum1= depth-previousBest.depth
         sum2= depth-tpathPart.depth
         
+        # If new path is closer store new one.
+        # WARNING: This is overlaping mode and should
+        #          be avoided, when creating config.
+        # TODO:    Add option to enable and disable
+        #          overlaping mode for speciffic path.
         if( sum2>0 and sum2<sum1):
             previousBest= tpathPart
             if report_truncated:
                 previous_truncated= truncated
-            
+        
         if(parent.parent.parent==None):
             if report_truncated:
                 return (previous_truncated, previousBest.PathStatus)
             else:
                 return previousBest.PathStatus;
-            
+        
         return self.__GetPathStatus__(path, parent.parent, previousBest, depth, report_truncated, previous_truncated)
-    
+
     def GetConfigByPath(self, path):
         if self.name != path[0]:
             return None
@@ -266,7 +295,7 @@ class ConfigLayer(pod.Object):
                     return child
         else:
             return self
-            
+        
         return None
     
     def GetConfigByName(self, name):
@@ -277,7 +306,7 @@ class ConfigLayer(pod.Object):
                     if cfg: return cfg
             else:
                 return None
-            
+        
         return self
     
     def GetRootConfigLayer(self):
